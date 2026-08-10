@@ -30,6 +30,11 @@ jobs:
       - name: Add Android platform
         run: npx cap add android
 
+      - name: Copy icon for asset generation
+        run: |
+          mkdir -p assets
+          cp www/icons/icon.png assets/icon.png
+
       - name: Generate Android icons
         run: npx @capacitor/assets generate --android
 
