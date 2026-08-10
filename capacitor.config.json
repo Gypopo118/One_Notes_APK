@@ -7,7 +7,7 @@
   },
   "plugins": {
     "assets": {
-      "iconSource": "www/icons/icon.png",
+      "iconSource": "assets/icon.png",
       "iconBackgroundColor": "#333335"
     }
   }
