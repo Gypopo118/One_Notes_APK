@@ -41,6 +41,11 @@ jobs:
       - name: Sync web files
         run: npx cap sync
 
+      - name: Inject Alarm Permissions into Manifest
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />' $MANIFEST_PATH
+
       - name: Build debug APK
         working-directory: android
         run: |
