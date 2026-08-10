@@ -13,11 +13,12 @@ const Reminders = (() => {
       
       // Регистрируем высокоприоритетный канал со звуком
       await LocalNotifications.createChannel({
-	        id: 'alarm_channel_v4',
+	        id: 'alarm_channel_v5',
 	        name: 'Будильники и напоминания',
 	        description: 'Громкий канал для точных напоминаний',
 	        importance: 5, // MAX importance (вызывает всплывающий баннер)
 	        visibility: 1, // VISIBILITY_PUBLIC (показывает на экране блокировки)
+	        sound: 'alarm.wav',
 	        vibration: true,
         lights: true,
         lightColor: '#FF0000'
@@ -63,7 +64,8 @@ const Reminders = (() => {
             body: body || '',
             id: notificationId,
 	            schedule: { at: new Date(timestamp) },
-	            channelId: 'alarm_channel_v4',
+	            channelId: 'alarm_channel_v5',
+	            sound: 'alarm.wav',
 	            actionTypeId: '',
             extra: null
           }
