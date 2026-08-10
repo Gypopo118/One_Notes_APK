@@ -38,13 +38,26 @@ jobs:
       - name: Generate Android icons
         run: npx @capacitor/assets generate --android
 
-      - name: Sync web files
-        run: npx cap sync
-
       - name: Inject Alarm Permissions into Manifest
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
           sed -i '/<application/i \    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />' $MANIFEST_PATH
+
+      - name: Generate Alarm Sound Resource
+        run: |
+          mkdir -p android/app/src/main/res/raw
+          python3 -c "
+          import wave, struct, math
+          with wave.open('android/app/src/main/res/raw/alarm.wav', 'wb') as f:
+              f.setnchannels(1)
+              f.setsampwidth(2)
+              f.setframerate(22050)
+              samples = [int(16000 * math.sin(2 * 3.14159 * 880 * t / 22050)) for t in range(22050 * 2)]
+              f.writeframes(b''.join(struct.pack('<h', s) for s in samples))
+          "
+
+      - name: Sync web files
+        run: npx cap sync
 
       - name: Build debug APK
         working-directory: android
