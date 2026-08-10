@@ -1,36 +1,41 @@
 /*
  * reminders.js — Capacitor Native AlarmManager adapter.
- * Срабатывает всегда в точное время с максимальным приоритетом и звуком (Android LocalNotifications).
+ * Срабатывает всегда в точное время (Android LocalNotifications).
  */
-const Reminders = (() => {
-  // Проверяем, запущено ли приложение в нативном контейнере Capacitor
-  const isCapacitor = !!(typeof window !== 'undefined' && window.Capacitor?.Plugins?.LocalNotifications);
+	const Reminders = (() => {
+	  // Проверяем, запущено ли приложение в нативном контейнере Capacitor
+	  const isCapacitor = !!(typeof window !== 'undefined' && window.Capacitor?.Plugins?.LocalNotifications);
 
-  // Флаг создания канала
-  let channelCreated = false;
+	  // Флаг, чтобы канал создавался только один раз
+	  let channelReady = false;
 
-  async function ensureChannel() {
-    if (!isCapacitor || channelCreated) return;
-    try {
-      const { LocalNotifications } = window.Capacitor.Plugins;
-      await LocalNotifications.createChannel({
-        id: 'alarm_channel',
-        name: 'Будильники и напоминания',
-        description: 'Канал для громких звуковых сигналов и всплывающих уведомлений',
-        importance: 5, // IMPORTANCE_HIGH / MAX (показывает баннер поверх экрана)
-        visibility: 1, // VISIBILITY_PUBLIC
-        sound: 'res://raw/alarm_sound.mp3', // Или системный звук
-        vibration: true,
-        lights: true,
-        lightColor: '#FF0000'
-      });
-      channelCreated = true;
-    } catch (e) {
-      console.warn('Не удалось создать Notification Channel:', e);
-    }
-  }
+	  /**
+	   * Создаёт Android Notification Channel для громких напоминаний-будильников.
+	   * Идемпотентный вызов — повторные вызовы безопасны.
+	   */
+	  async function ensureChannel() {
+	    if (channelReady || !isCapacitor) return;
+	    try {
+	      const { LocalNotifications } = window.Capacitor.Plugins;
+	      await LocalNotifications.createChannel({
+	        id: 'alarm_channel_v2',
+	        name: 'Будильники и напоминания',
+	        description: 'Канал для громких звуковых сигналов',
+	        importance: 5,   // IMPORTANCE_MAX
+	        visibility: 1,   // VISIBILITY_PUBLIC
+	        sound: 'default',
+	        vibration: true,
+	        lights: true,
+	        lightColor: '#FF0000'
+	      });
+	      channelReady = true;
+	    } catch (e) {
+	      // Не фатально — если createChannel не поддерживается, 
+	      // уведомления всё равно сработают через дефолтный канал
+	    }
+	  }
 
-  async function ensurePermission() {
+	  async function ensurePermission() {
     if (isCapacitor) {
       const { LocalNotifications } = window.Capacitor.Plugins;
       const perm = await LocalNotifications.checkPermissions();
@@ -50,34 +55,33 @@ const Reminders = (() => {
     // Идентификатор для нативных уведомлений должен быть числом 32-bit int
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
 
-    if (isCapacitor) {
-      const { LocalNotifications } = window.Capacitor.Plugins;
+	    if (isCapacitor) {
+	      const { LocalNotifications } = window.Capacitor.Plugins;
+	      
+	      // Отменяем старое уведомление с тем же ID
+	      await cancel(id);
 
-      // Создаем громкий канал перед планированием
-      await ensureChannel();
-      
-      // Отменяем старое уведомление с тем же ID
-      await cancel(id);
+	      // Создаём канал будильника (идемпотентно)
+	      await ensureChannel();
 
-      // Регистрируем нативный будильник в Android AlarmManager
-      await LocalNotifications.schedule({
-        notifications: [
-          {
-            title: title || 'Напоминание',
-            body: body || '',
-            id: notificationId,
-            schedule: { at: new Date(timestamp), allowWhileIdle: true },
-            channelId: 'alarm_channel',
-            sound: 'res://raw/alarm_sound.mp3',
-            actionTypeId: '',
-            extra: null
-          }
-        ]
-      });
-      return true;
-    }
+	      // Регистрируем нативный будильник в Android AlarmManager
+	      await LocalNotifications.schedule({
+	        notifications: [
+	          {
+	            title: title || 'Напоминание',
+	            body: body || '',
+	            id: notificationId,
+	            schedule: { at: new Date(timestamp) },
+	            channelId: 'alarm_channel_v2',
+	            actionTypeId: '',
+	            extra: null
+	          }
+	        ]
+	      });
+	      return true;
+	    }
 
-    // Фоллбек для обычного браузера
+    // Фоллбек для обычного браузера (старый код)
     const delay = timestamp - Date.now();
     if (delay <= 0) {
       new Notification(title, { body, tag: id });
@@ -96,6 +100,8 @@ const Reminders = (() => {
   }
 
   function rearm(notes) {
+    // В Capacitor rearm не требуется: Android AlarmManager помнит 
+    // все запланированные уведомления даже после перезагрузки телефона.
     if (isCapacitor) return;
 
     const now = Date.now();
