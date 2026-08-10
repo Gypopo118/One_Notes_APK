@@ -1,0 +1,14 @@
+{
+  "appId": "com.mynotes.app",
+  "appName": "Заметки",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "assets": {
+      "iconSource": "www/icons/icon.png",
+      "iconBackgroundColor": "#333335"
+    }
+  }
+}
