@@ -381,6 +381,43 @@ button{font-family:inherit;}
 .modal-clear{background:var(--accent-urgent-bg);color:var(--accent-urgent);}
 .modal-save{background:var(--ink);color:#1B1A19;}
 
+/* ---------- Toast notification ---------- */
+.toast{
+  position:fixed;
+  bottom:calc(var(--nav-height) + 18px);
+  left:50%;
+  transform:translateX(-50%);
+  background:#1B1A19;
+  color:var(--ink);
+  border:1px solid var(--control-border);
+  box-shadow:0 8px 24px rgba(0,0,0,0.5);
+  border-radius:14px;
+  padding:12px 18px;
+  font-size:14px;
+  font-weight:500;
+  z-index:50;
+  max-width:calc(100vw - 32px);
+  text-align:center;
+  pointer-events:none;
+  animation:toastPop .25s ease;
+  transition:opacity .25s ease;
+}
+.toast.hidden{display:none;}
+@keyframes toastPop{
+  from{opacity:0;transform:translate(-50%, 10px);}
+  to{opacity:1;transform:translate(-50%, 0);}
+}
+
+.reminder-btn.error{
+  border-color:var(--danger);
+  animation:btnShake .35s ease;
+}
+@keyframes btnShake{
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+
 .editor-card.growing{
   transition:transform .26s cubic-bezier(.2,.7,.3,1);
 }

@@ -1,23 +1,93 @@
 package com.mynotes.app.alarm;
 
+import android.Manifest;
 import android.app.AlarmManager;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
 
+import androidx.core.content.ContextCompat;
+
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
-@CapacitorPlugin(name = "NativeAlarm")
+@CapacitorPlugin(
+    name = "NativeAlarm",
+    permissions = {
+        @Permission(
+            alias = "notifications",
+            strings = { Manifest.permission.POST_NOTIFICATIONS }
+        )
+    }
+)
 public class NativeAlarmPlugin extends Plugin {
+
+    @Override
+    public void load() {
+        super.load();
+        AlarmScheduler.ensureChannelCreated(getContext());
+    }
+
+    @PluginMethod
+    public void ensureChannel(PluginCall call) {
+        AlarmScheduler.ensureChannelCreated(getContext());
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void checkNotificationPermission(PluginCall call) {
+        JSObject ret = new JSObject();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            boolean granted = ContextCompat.checkSelfPermission(
+                getContext(),
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED;
+            ret.put("granted", granted);
+        } else {
+            ret.put("granted", true);
+        }
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void requestNotificationPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                getContext(),
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED) {
+                JSObject ret = new JSObject();
+                ret.put("granted", true);
+                call.resolve(ret);
+            } else {
+                requestPermissionForAlias("notifications", call, "notificationPermCallback");
+            }
+        } else {
+            JSObject ret = new JSObject();
+            ret.put("granted", true);
+            call.resolve(ret);
+        }
+    }
+
+    @PermissionCallback
+    private void notificationPermCallback(PluginCall call) {
+        JSObject ret = new JSObject();
+        boolean granted = getPermissionState("notifications") == PermissionState.GRANTED;
+        ret.put("granted", granted);
+        call.resolve(ret);
+    }
 
     @PluginMethod
     public void schedule(PluginCall call) {

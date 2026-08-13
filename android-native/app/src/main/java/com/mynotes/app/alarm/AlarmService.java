@@ -30,7 +30,7 @@ import com.mynotes.app.R;
  */
 public class AlarmService extends Service {
 
-    public static final String CHANNEL_ID = "alarm_channel_v6";
+    public static final String CHANNEL_ID = AlarmScheduler.CHANNEL_ID;
     public static final String ACTION_STOP = "com.mynotes.app.alarm.ACTION_STOP";
     public static final String ACTION_SNOOZE = "com.mynotes.app.alarm.ACTION_SNOOZE";
     private static final int NOTIF_ID = 4242;
@@ -43,8 +43,7 @@ public class AlarmService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        deleteStaleChannels();
-        createChannel();
+        AlarmScheduler.ensureChannelCreated(this);
     }
 
     @Override
@@ -93,50 +92,8 @@ public class AlarmService extends Service {
         return START_STICKY;
     }
 
-    private void deleteStaleChannels() {
-        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        // Канал в Android иммутабелен после создания (звук/важность нельзя
-        // поменять апдейтом приложения) — единственный надёжный способ
-        // починить "звук отключён" у уже установленных пользователей это
-        // удалить все старые версии ID и создать новый.
-        String[] staleIds = {"alarm_channel", "alarm_channel_v2", "alarm_channel_v3",
-                "alarm_channel_v4", "alarm_channel_v5", "default", "default_channel"};
-        for (String id : staleIds) {
-            try { nm.deleteNotificationChannel(id); } catch (Exception ignored) {}
-        }
-    }
-
-    private void createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm == null) return;
-
-        AudioAttributes attrs = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build();
-
-        NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID, "Будильники", NotificationManager.IMPORTANCE_HIGH);
-        channel.setDescription("Громкий канал для срабатывания будильников");
-        channel.setSound(defaultAlarmSoundUri(), attrs);
-        channel.enableVibration(true);
-        channel.setVibrationPattern(new long[]{0, 800, 400, 800});
-        channel.enableLights(true);
-        channel.setLightColor(0xFFFF0000);
-        channel.setBypassDnd(true);
-        channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-        nm.createNotificationChannel(channel);
-    }
-
-    /** RingtoneManager.getActualDefaultRingtoneUri — системный дефолт "Будильник",
-     *  всегда существует, в отличие от произвольного res/raw файла. Используется
-     *  как гарантированный fallback, если пользовательский звук не найден. */
     private Uri defaultAlarmSoundUri() {
-        Uri uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_ALARM);
-        if (uri == null) uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-        return uri;
+        return AlarmScheduler.getDefaultAlarmSoundUri(this);
     }
 
     private Notification buildNotification(String title, String body, String soundUriStr) {

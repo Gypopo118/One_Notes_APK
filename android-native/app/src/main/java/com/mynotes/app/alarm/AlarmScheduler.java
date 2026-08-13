@@ -1,10 +1,15 @@
 package com.mynotes.app.alarm;
 
 import android.app.AlarmManager;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.Build;
 
 import org.json.JSONArray;
@@ -25,8 +30,61 @@ import java.util.List;
  */
 public class AlarmScheduler {
 
+    public static final String CHANNEL_ID = "alarm_channel_v7";
     private static final String PREFS = "alarms_store";
     private static final String KEY_ALARMS = "alarms";
+
+    public static synchronized void ensureChannelCreated(Context ctx) {
+        if (ctx == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        deleteStaleChannels(nm);
+
+        NotificationChannel existing = nm.getNotificationChannel(CHANNEL_ID);
+        if (existing != null) return;
+
+        AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                .build();
+
+        NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID, "Будильники", NotificationManager.IMPORTANCE_HIGH);
+        channel.setDescription("Громкий канал для срабатывания будильников");
+        channel.setSound(getDefaultAlarmSoundUri(ctx), attrs);
+        channel.enableVibration(true);
+        channel.setVibrationPattern(new long[]{0, 800, 400, 800});
+        channel.enableLights(true);
+        channel.setLightColor(0xFFFF0000);
+        channel.setBypassDnd(true);
+        channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
+        nm.createNotificationChannel(channel);
+    }
+
+    private static void deleteStaleChannels(NotificationManager nm) {
+        if (nm == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        String[] staleIds = {"alarm_channel", "alarm_channel_v1", "alarm_channel_v2", "alarm_channel_v3",
+                "alarm_channel_v4", "alarm_channel_v5", "alarm_channel_v6", "default", "default_channel"};
+        for (String id : staleIds) {
+            try { nm.deleteNotificationChannel(id); } catch (Exception ignored) {}
+        }
+    }
+
+    public static Uri getDefaultAlarmSoundUri(Context context) {
+        Uri uri = null;
+        try {
+            uri = RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_ALARM);
+        } catch (Exception ignored) {}
+        if (uri == null) {
+            uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+        }
+        if (uri == null) {
+            uri = android.provider.Settings.System.DEFAULT_ALARM_ALERT_URI;
+        }
+        return uri;
+    }
 
     public static class AlarmEntry {
         public long id;
@@ -57,6 +115,7 @@ public class AlarmScheduler {
     }
 
     public static void schedule(Context ctx, long id, long triggerAt, String title, String body, String soundUri) {
+        ensureChannelCreated(ctx);
         AlarmEntry e = new AlarmEntry();
         e.id = id; e.triggerAt = triggerAt; e.title = title; e.body = body; e.soundUri = soundUri;
         saveEntry(ctx, e);

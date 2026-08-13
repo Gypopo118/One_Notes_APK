@@ -8,71 +8,123 @@
  * app.js вызывает его точно так же, как раньше.
  */
 const Reminders = (() => {
-  const plugins = (typeof window !== 'undefined' && window.Capacitor?.Plugins) || {};
-  const NativeAlarm = plugins.NativeAlarm || null;
-  const LocalNotifications = plugins.LocalNotifications || null;
-  const isNative = !!NativeAlarm;
+  function getNativeAlarm() {
+    return (typeof window !== 'undefined' && (window.Capacitor?.Plugins?.NativeAlarm || window.NativeAlarm)) || null;
+  }
+
+  function getLocalNotifications() {
+    return (typeof window !== 'undefined' && window.Capacitor?.Plugins?.LocalNotifications) || null;
+  }
+
+  function isNative() {
+    return !!getNativeAlarm();
+  }
 
   // ---------- Разрешения ----------
   async function ensurePermission() {
-    if (isNative) {
-      // POST_NOTIFICATIONS (Android 13+) запрашивается автоматически при
-      // первом создании канала системой Capacitor; специфичные для
-      // будильника разрешения (точные будильники, полноэкранный интент,
-      // игнор оптимизации батареи) — отдельные шаги, см. ensureAlarmSetup().
-      return true;
+    const native = getNativeAlarm();
+    if (native) {
+      try {
+        // Гарантируем создание канала звука
+        if (typeof native.ensureChannel === 'function') {
+          await native.ensureChannel();
+        }
+
+        // Запрашиваем runtime разрешение POST_NOTIFICATIONS (Android 13+)
+        if (typeof native.requestNotificationPermission === 'function') {
+          const res = await native.requestNotificationPermission();
+          if (res && res.granted === false) {
+            return false;
+          }
+        }
+
+        // Проверяем точные будильники (Android 12+)
+        if (typeof native.canScheduleExactAlarms === 'function') {
+          const { value } = await native.canScheduleExactAlarms();
+          if (value === false && typeof native.requestExactAlarmPermission === 'function') {
+            await native.requestExactAlarmPermission();
+          }
+        }
+
+        return true;
+      } catch (err) {
+        console.warn('Ошибка при проверке разрешений будильника:', err);
+        return true; // продолжаем попытку
+      }
     }
-    if (LocalNotifications) {
-      const perm = await LocalNotifications.checkPermissions();
-      if (perm.display === 'granted') return true;
-      const req = await LocalNotifications.requestPermissions();
-      return req.display === 'granted';
+
+    const localNotif = getLocalNotifications();
+    if (localNotif) {
+      try {
+        const perm = await localNotif.checkPermissions();
+        if (perm && perm.display === 'granted') return true;
+        const req = await localNotif.requestPermissions();
+        return req && req.display === 'granted';
+      } catch (e) {
+        return false;
+      }
     }
-    if (!('Notification' in window)) return false;
-    if (Notification.permission === 'granted') return true;
-    return (await Notification.requestPermission()) === 'granted';
+
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') return true;
+      if (Notification.permission === 'denied') return false;
+      try {
+        const res = await Notification.requestPermission();
+        return res === 'granted';
+      } catch (e) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
-  // Вызывать один раз при старте приложения (например, из экрана настроек
-  // или при первом создании напоминания) — проверяет и по очереди
-  // запрашивает разрешения, без которых будильник может не сработать
-  // при выключенном экране / на MIUI-подобных прошивках.
   async function ensureAlarmSetup() {
-    if (!isNative) return;
+    const native = getNativeAlarm();
+    if (!native) return;
     try {
-      const { value } = await NativeAlarm.canScheduleExactAlarms();
-      if (!value) await NativeAlarm.requestExactAlarmPermission();
-    } catch (e) {}
-    try {
-      await NativeAlarm.requestFullScreenIntentPermission();
-    } catch (e) {}
-    try {
-      await NativeAlarm.requestIgnoreBatteryOptimizations();
+      if (typeof native.ensureChannel === 'function') await native.ensureChannel();
+      if (typeof native.canScheduleExactAlarms === 'function') {
+        const { value } = await native.canScheduleExactAlarms();
+        if (!value && typeof native.requestExactAlarmPermission === 'function') {
+          await native.requestExactAlarmPermission();
+        }
+      }
+      if (typeof native.requestFullScreenIntentPermission === 'function') {
+        await native.requestFullScreenIntentPermission();
+      }
+      if (typeof native.requestIgnoreBatteryOptimizations === 'function') {
+        await native.requestIgnoreBatteryOptimizations();
+      }
     } catch (e) {}
   }
 
   // ---------- Планирование ----------
   async function schedule(id, timestamp, title, body) {
     const granted = await ensurePermission();
-    if (!granted) return false;
+    if (!granted) {
+      throw new Error('Нет разрешения на отправку уведомлений');
+    }
 
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
+    const native = getNativeAlarm();
 
-    if (isNative) {
+    if (native) {
       const soundUri = await getCustomSoundUri();
-      await NativeAlarm.schedule({
+      await native.schedule({
         id: notificationId,
         at: timestamp,
-        title: title || 'Напоминание',
+        title: title || 'Будильник',
         body: body || '',
         soundUri: soundUri || null,
       });
       return true;
     }
 
-    if (LocalNotifications) {
+    const localNotif = getLocalNotifications();
+    if (localNotif) {
       await cancel(id);
-      await LocalNotifications.schedule({
+      await localNotif.schedule({
         notifications: [{
           title: title || 'Напоминание',
           body: body || '',
@@ -83,54 +135,55 @@ const Reminders = (() => {
       return true;
     }
 
-    const delay = timestamp - Date.now();
-    if (delay <= 0) {
-      new Notification(title, { body, tag: id });
-    } else {
-      setTimeout(() => new Notification(title, { body, tag: id }), delay);
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      const delay = timestamp - Date.now();
+      if (delay <= 0) {
+        new Notification(title || 'Напоминание', { body: body || '', tag: String(id) });
+      } else {
+        setTimeout(() => new Notification(title || 'Напоминание', { body: body || '', tag: String(id) }), delay);
+      }
     }
     return true;
   }
 
   async function cancel(id) {
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
-    if (isNative) {
-      try { await NativeAlarm.cancel({ id: notificationId }); } catch (e) {}
+    const native = getNativeAlarm();
+    if (native) {
+      try { await native.cancel({ id: notificationId }); } catch (e) {}
       return;
     }
-    if (LocalNotifications) {
-      try { await LocalNotifications.cancel({ notifications: [{ id: notificationId }] }); } catch (e) {}
+    const localNotif = getLocalNotifications();
+    if (localNotif) {
+      try { await localNotif.cancel({ notifications: [{ id: notificationId }] }); } catch (e) {}
     }
   }
 
   function rearm(notes) {
-    // На Android перепланирование при перезапуске приложения не нужно:
-    // все активные будильники живут в SharedPreferences нативного слоя и
-    // переставляются самостоятельно через BootReceiver при перезагрузке
-    // устройства, а не при перезапуске веб-контекста.
-    if (isNative) return;
+    if (isNative()) return;
 
     const now = Date.now();
     notes.forEach((note) => {
       if (!note.reminderAt) return;
       const preview = (note.text || '').split('\n')[0].slice(0, 60) || 'Заметка';
       if (note.reminderAt > now) {
-        schedule(note.id, note.reminderAt, 'Напоминание', preview);
+        schedule(note.id, note.reminderAt, 'Напоминание', preview).catch(() => {});
       }
     });
   }
 
-  // ---------- Выбор своей мелодии (опционально, экран настроек) ----------
+  // ---------- Выбор своей мелодии ----------
   const SOUND_KEY = 'mynotes_custom_alarm_sound_uri';
 
   async function pickCustomSound() {
-    if (!isNative) return null;
+    const native = getNativeAlarm();
+    if (!native || typeof native.pickSound !== 'function') return null;
     try {
-      const { uri } = await NativeAlarm.pickSound();
+      const { uri } = await native.pickSound();
       if (uri) localStorage.setItem(SOUND_KEY, uri);
       return uri || null;
     } catch (e) {
-      return null; // пользователь отменил выбор — не фатально
+      return null;
     }
   }
 
@@ -151,5 +204,5 @@ const Reminders = (() => {
     return hash;
   }
 
-  return { schedule, cancel, rearm, ensurePermission, ensureAlarmSetup, pickCustomSound };
+  return { schedule, cancel, rearm, ensurePermission, ensureAlarmSetup, pickCustomSound, isNative };
 })();

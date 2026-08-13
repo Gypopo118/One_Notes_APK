@@ -29,6 +29,7 @@
   const reminderSave = el('reminderSave');
   const reminderClear = el('reminderClear');
   const reminderCancel = el('reminderCancel');
+  const toast = el('toast');
 
   const navBtns = Array.from(document.querySelectorAll('.nav-btn'));
   const badgeUrgent = el('badgeUrgent');
@@ -65,6 +66,7 @@
     try { await loadNotes('buy'); } catch (e) {}
 
     try { Reminders.rearm([...state.notesCache.urgent, ...state.notesCache.plans, ...state.notesCache.buy]); } catch (e) {}
+    try { Reminders.ensureAlarmSetup(); } catch (e) {}
 
     try { await updateShoppingBadge(); } catch (e) {}
 
@@ -478,6 +480,20 @@
     if (clearConfirming && !clearAllBtn.contains(e.target)) exitClearConfirm();
   });
 
+  // ---------- Toast Helper ----------
+  let toastTimer = null;
+  function showToast(msg) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.remove('hidden');
+    toast.style.opacity = '1';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => toast.classList.add('hidden'), 250);
+    }, 3500);
+  }
+
   // ---------- Reminder modal ----------
   reminderBtn.addEventListener('click', () => {
     if (!state.currentNote) return;
@@ -489,24 +505,69 @@
   reminderModal.addEventListener('click', (e) => { if (e.target === reminderModal) reminderModal.classList.add('hidden'); });
 
   reminderClear.addEventListener('click', async () => {
-    if (state.currentNote) {
-      Reminders.cancel(state.currentNote.id);
-      state.currentNote.reminderAt = null;
-      await DB.putNote(state.currentNote);
-    }
     reminderModal.classList.add('hidden');
-    render();
+    if (state.currentNote) {
+      const id = state.currentNote.id;
+      state.currentNote.reminderAt = null;
+      reminderBtn.classList.remove('set');
+      reminderBtn.textContent = reminderLabel(state.currentNote);
+      try {
+        Reminders.cancel(id);
+        await DB.putNote(state.currentNote);
+        await loadNotes(state.tab);
+        renderCards();
+        updateNoteBadges();
+      } catch (e) {}
+    }
   });
 
   reminderSave.addEventListener('click', async () => {
-    if (!state.currentNote || !reminderInput.value) { reminderModal.classList.add('hidden'); return; }
+    if (!state.currentNote || !reminderInput.value) {
+      reminderModal.classList.add('hidden');
+      return;
+    }
     const ts = new Date(reminderInput.value).getTime();
-    state.currentNote.reminderAt = ts;
-    await DB.putNote(state.currentNote);
-    const preview = (state.currentNote.text || '').split('\n')[0].slice(0, 60) || 'Заметка';
-    await Reminders.schedule(state.currentNote.id, ts, 'Напоминание', preview);
+    if (isNaN(ts)) {
+      reminderModal.classList.add('hidden');
+      return;
+    }
+
+    // 1. Мгновенно закрываем модальное окно
     reminderModal.classList.add('hidden');
-    render();
+
+    const prevReminderAt = state.currentNote.reminderAt;
+    state.currentNote.reminderAt = ts;
+
+    // 2. Оптимистично обновляем кнопку в редакторе
+    reminderBtn.classList.add('set');
+    reminderBtn.textContent = reminderLabel(state.currentNote);
+
+    // 3. Сохраняем в локальную БД
+    try {
+      await DB.putNote(state.currentNote);
+      await loadNotes(state.tab);
+      renderCards();
+      updateNoteBadges();
+    } catch (e) {}
+
+    // 4. Фоново вызываем нативный будильник
+    const preview = (state.currentNote.text || '').split('\n')[0].slice(0, 60) || 'Заметка';
+    try {
+      await Reminders.schedule(state.currentNote.id, ts, 'Будильник', preview);
+    } catch (err) {
+      console.error('Ошибка планирования будильника:', err);
+      // Откат оптимистичного состояния при ошибке
+      state.currentNote.reminderAt = prevReminderAt;
+      await DB.putNote(state.currentNote);
+      await loadNotes(state.tab);
+      reminderBtn.classList.toggle('set', !!(state.currentNote && state.currentNote.reminderAt));
+      reminderBtn.textContent = reminderLabel(state.currentNote);
+      reminderBtn.classList.add('error');
+      setTimeout(() => reminderBtn.classList.remove('error'), 800);
+      renderCards();
+      updateNoteBadges();
+      showToast(err.message || 'Не удалось включить будильник: нет разрешения');
+    }
   });
 
   function toLocalInputValue(d) {
