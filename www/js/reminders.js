@@ -1,38 +1,28 @@
 /*
- * reminders.js — Capacitor Native AlarmManager adapter for Android / HyperOS.
+ * reminders.js — нативный будильник на Android через плагин NativeAlarm
+ * (см. android-native/.../alarm/NativeAlarmPlugin.java), с откатом на
+ * @capacitor/local-notifications / Web Notification API вне Android
+ * (веб-разработка, iOS в будущем).
+ *
+ * Публичный API (schedule/cancel/rearm/ensurePermission) не менялся —
+ * app.js вызывает его точно так же, как раньше.
  */
 const Reminders = (() => {
-  const isCapacitor = !!(typeof window !== 'undefined' && window.Capacitor?.Plugins?.LocalNotifications);
+  const plugins = (typeof window !== 'undefined' && window.Capacitor?.Plugins) || {};
+  const NativeAlarm = plugins.NativeAlarm || null;
+  const LocalNotifications = plugins.LocalNotifications || null;
+  const isNative = !!NativeAlarm;
 
-  let channelCreated = false;
-
-  async function ensureChannel() {
-    if (!isCapacitor || channelCreated) return;
-    try {
-      const { LocalNotifications } = window.Capacitor.Plugins;
-      
-      // Регистрируем высокоприоритетный канал со звуком
-      await LocalNotifications.createChannel({
-	        id: 'alarm_channel_v5',
-	        name: 'Будильники и напоминания',
-	        description: 'Громкий канал для точных напоминаний',
-	        importance: 5, // MAX importance (вызывает всплывающий баннер)
-	        visibility: 1, // VISIBILITY_PUBLIC (показывает на экране блокировки)
-	        sound: 'alarm.wav',
-	        vibration: true,
-        lights: true,
-        lightColor: '#FF0000'
-      });
-      
-      channelCreated = true;
-    } catch (e) {
-      console.error('Ошибка создания канала уведомлений:', e);
-    }
-  }
-
+  // ---------- Разрешения ----------
   async function ensurePermission() {
-    if (isCapacitor) {
-      const { LocalNotifications } = window.Capacitor.Plugins;
+    if (isNative) {
+      // POST_NOTIFICATIONS (Android 13+) запрашивается автоматически при
+      // первом создании канала системой Capacitor; специфичные для
+      // будильника разрешения (точные будильники, полноэкранный интент,
+      // игнор оптимизации батареи) — отдельные шаги, см. ensureAlarmSetup().
+      return true;
+    }
+    if (LocalNotifications) {
       const perm = await LocalNotifications.checkPermissions();
       if (perm.display === 'granted') return true;
       const req = await LocalNotifications.requestPermissions();
@@ -43,33 +33,52 @@ const Reminders = (() => {
     return (await Notification.requestPermission()) === 'granted';
   }
 
+  // Вызывать один раз при старте приложения (например, из экрана настроек
+  // или при первом создании напоминания) — проверяет и по очереди
+  // запрашивает разрешения, без которых будильник может не сработать
+  // при выключенном экране / на MIUI-подобных прошивках.
+  async function ensureAlarmSetup() {
+    if (!isNative) return;
+    try {
+      const { value } = await NativeAlarm.canScheduleExactAlarms();
+      if (!value) await NativeAlarm.requestExactAlarmPermission();
+    } catch (e) {}
+    try {
+      await NativeAlarm.requestFullScreenIntentPermission();
+    } catch (e) {}
+    try {
+      await NativeAlarm.requestIgnoreBatteryOptimizations();
+    } catch (e) {}
+  }
+
+  // ---------- Планирование ----------
   async function schedule(id, timestamp, title, body) {
     const granted = await ensurePermission();
     if (!granted) return false;
 
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
 
-    if (isCapacitor) {
-      const { LocalNotifications } = window.Capacitor.Plugins;
+    if (isNative) {
+      const soundUri = await getCustomSoundUri();
+      await NativeAlarm.schedule({
+        id: notificationId,
+        at: timestamp,
+        title: title || 'Напоминание',
+        body: body || '',
+        soundUri: soundUri || null,
+      });
+      return true;
+    }
 
-      // Гарантируем создание канала перед планированием
-      await ensureChannel();
-      
+    if (LocalNotifications) {
       await cancel(id);
-
       await LocalNotifications.schedule({
-        notifications: [
-          {
-            title: title || 'Напоминание',
-            body: body || '',
-            id: notificationId,
-	            schedule: { at: new Date(timestamp) },
-	            channelId: 'alarm_channel_v5',
-	            sound: 'alarm.wav',
-	            actionTypeId: '',
-            extra: null
-          }
-        ]
+        notifications: [{
+          title: title || 'Напоминание',
+          body: body || '',
+          id: notificationId,
+          schedule: { at: new Date(timestamp) },
+        }],
       });
       return true;
     }
@@ -85,16 +94,21 @@ const Reminders = (() => {
 
   async function cancel(id) {
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
-    if (isCapacitor) {
-      const { LocalNotifications } = window.Capacitor.Plugins;
-      try {
-        await LocalNotifications.cancel({ notifications: [{ id: notificationId }] });
-      } catch (e) {}
+    if (isNative) {
+      try { await NativeAlarm.cancel({ id: notificationId }); } catch (e) {}
+      return;
+    }
+    if (LocalNotifications) {
+      try { await LocalNotifications.cancel({ notifications: [{ id: notificationId }] }); } catch (e) {}
     }
   }
 
   function rearm(notes) {
-    if (isCapacitor) return;
+    // На Android перепланирование при перезапуске приложения не нужно:
+    // все активные будильники живут в SharedPreferences нативного слоя и
+    // переставляются самостоятельно через BootReceiver при перезагрузке
+    // устройства, а не при перезапуске веб-контекста.
+    if (isNative) return;
 
     const now = Date.now();
     notes.forEach((note) => {
@@ -106,6 +120,28 @@ const Reminders = (() => {
     });
   }
 
+  // ---------- Выбор своей мелодии (опционально, экран настроек) ----------
+  const SOUND_KEY = 'mynotes_custom_alarm_sound_uri';
+
+  async function pickCustomSound() {
+    if (!isNative) return null;
+    try {
+      const { uri } = await NativeAlarm.pickSound();
+      if (uri) localStorage.setItem(SOUND_KEY, uri);
+      return uri || null;
+    } catch (e) {
+      return null; // пользователь отменил выбор — не фатально
+    }
+  }
+
+  async function getCustomSoundUri() {
+    try {
+      return localStorage.getItem(SOUND_KEY) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function hashCode(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
@@ -115,5 +151,5 @@ const Reminders = (() => {
     return hash;
   }
 
-  return { schedule, cancel, rearm, ensurePermission };
+  return { schedule, cancel, rearm, ensurePermission, ensureAlarmSetup, pickCustomSound };
 })();

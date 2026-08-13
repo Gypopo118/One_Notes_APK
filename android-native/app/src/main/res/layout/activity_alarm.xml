@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#1B1A19"
+    android:padding="32dp">
+
+    <TextView
+        android:id="@+id/alarmTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#F8F5EF"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="12dp"/>
+
+    <TextView
+        android:id="@+id/alarmBody"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#C9C0AC"
+        android:textSize="16sp"
+        android:gravity="center"
+        android:layout_marginBottom="48dp"/>
+
+    <Button
+        android:id="@+id/stopButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Остановить"
+        android:textSize="18sp"
+        android:padding="16dp"
+        android:backgroundTint="#FF7A6E"
+        android:textColor="#1B1A19"
+        android:layout_marginBottom="16dp"/>
+
+    <Button
+        android:id="@+id/snoozeButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Отложить на 10 минут"
+        android:textSize="16sp"
+        android:padding="14dp"
+        android:backgroundTint="#48474A"
+        android:textColor="#F8F5EF"/>
+
+</LinearLayout>

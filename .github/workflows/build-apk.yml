@@ -38,12 +38,17 @@ jobs:
       - name: Generate Android icons
         run: npx @capacitor/assets generate --android
 
-      - name: Inject Alarm Permissions into Manifest
-        run: |
-          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
-          sed -i '/<application/i \    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />' $MANIFEST_PATH
+      # ВАЖНО: этот шаг должен идти ПОСЛЕ `cap add android` (иначе папки android/
+      # ещё не существует) и ДО `cap sync` (чтобы веб-ассеты синхронизировались
+      # уже поверх готового нативного проекта). Он копирует классы будильника
+      # (AlarmReceiver/AlarmService/AlarmActivity/BootReceiver/NativeAlarmPlugin,
+      # переопределённый MainActivity, layout, иконку) и патчит AndroidManifest.xml.
+      # Без этого шага все нативные доработки будильника исчезают при каждой
+      # пересборке, так как android/ не хранится в репозитории.
+      - name: Patch native alarm sources into generated Android project
+        run: python3 scripts/patch-android.py
 
-      - name: Generate Alarm Sound Resource
+      - name: Generate Alarm Sound Resource (fallback tone if no user asset)
         run: |
           mkdir -p android/app/src/main/res/raw
           python3 -c "
