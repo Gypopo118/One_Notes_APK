@@ -89,11 +89,33 @@ public class NativeAlarmPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    private Long getLongValue(PluginCall call, String key) {
+        if (call == null || call.getData() == null) return null;
+        Object val = call.getData().opt(key);
+        if (val == null || val == org.json.JSONObject.NULL) return null;
+        if (val instanceof Number) {
+            return ((Number) val).longValue();
+        }
+        if (val instanceof String) {
+            try {
+                return Long.parseLong((String) val);
+            } catch (NumberFormatException e) {
+                try {
+                    return (long) Double.parseDouble((String) val);
+                } catch (Exception ignored) {}
+            }
+        }
+        try {
+            return call.getLong(key);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     @PluginMethod
     public void schedule(PluginCall call) {
-        Long id = call.getLong("id");
-        Long at = call.getLong("at"); // мс, unix timestamp
-        String title = call.getString("title", "Напоминание");
+        Long id = getLongValue(call, "id");
+        Long at = getLongValue(call, "at"); // мс, unix timestamp
+        String title = call.getString("title", "Будильник");
         String body = call.getString("body", "");
         String soundUri = call.getString("soundUri", null);
 
@@ -107,7 +129,7 @@ public class NativeAlarmPlugin extends Plugin {
 
     @PluginMethod
     public void cancel(PluginCall call) {
-        Long id = call.getLong("id");
+        Long id = getLongValue(call, "id");
         if (id == null) { call.reject("Требуется параметр id"); return; }
         AlarmScheduler.cancel(getContext(), id);
         call.resolve();

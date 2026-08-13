@@ -107,13 +107,14 @@ const Reminders = (() => {
     }
 
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
+    const targetTimestamp = typeof timestamp === 'number' ? timestamp : Number(timestamp);
     const native = getNativeAlarm();
 
     if (native) {
       const soundUri = await getCustomSoundUri();
       await native.schedule({
-        id: notificationId,
-        at: timestamp,
+        id: Number(notificationId),
+        at: Number(targetTimestamp),
         title: title || 'Будильник',
         body: body || '',
         soundUri: soundUri || null,
@@ -128,15 +129,15 @@ const Reminders = (() => {
         notifications: [{
           title: title || 'Напоминание',
           body: body || '',
-          id: notificationId,
-          schedule: { at: new Date(timestamp) },
+          id: Number(notificationId),
+          schedule: { at: new Date(targetTimestamp) },
         }],
       });
       return true;
     }
 
     if (typeof window !== 'undefined' && 'Notification' in window) {
-      const delay = timestamp - Date.now();
+      const delay = targetTimestamp - Date.now();
       if (delay <= 0) {
         new Notification(title || 'Напоминание', { body: body || '', tag: String(id) });
       } else {
@@ -150,7 +151,7 @@ const Reminders = (() => {
     const notificationId = typeof id === 'number' ? id : Math.abs(hashCode(String(id)));
     const native = getNativeAlarm();
     if (native) {
-      try { await native.cancel({ id: notificationId }); } catch (e) {}
+      try { await native.cancel({ id: Number(notificationId) }); } catch (e) {}
       return;
     }
     const localNotif = getLocalNotifications();
