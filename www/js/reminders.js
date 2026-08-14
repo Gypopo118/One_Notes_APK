@@ -90,7 +90,12 @@ const Reminders = (() => {
           await native.requestExactAlarmPermission();
         }
       }
-      if (typeof native.requestFullScreenIntentPermission === 'function') {
+      if (typeof native.canUseFullScreenIntent === 'function') {
+        const { value } = await native.canUseFullScreenIntent();
+        if (!value && typeof native.requestFullScreenIntentPermission === 'function') {
+          await native.requestFullScreenIntentPermission();
+        }
+      } else if (typeof native.requestFullScreenIntentPermission === 'function') {
         await native.requestFullScreenIntentPermission();
       }
       if (typeof native.requestIgnoreBatteryOptimizations === 'function') {

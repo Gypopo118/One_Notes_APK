@@ -2,6 +2,7 @@ package com.mynotes.app.alarm;
 
 import android.Manifest;
 import android.app.AlarmManager;
+import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -159,15 +160,30 @@ public class NativeAlarmPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void canUseFullScreenIntent(PluginCall call) {
+        JSObject ret = new JSObject();
+        if (Build.VERSION.SDK_INT >= 34) {
+            NotificationManager nm = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            ret.put("value", nm != null && nm.canUseFullScreenIntent());
+        } else {
+            ret.put("value", true);
+        }
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void requestFullScreenIntentPermission(PluginCall call) {
         // Только Android 14+ — на более старых версиях full-screen intent выдаётся автоматически.
         if (Build.VERSION.SDK_INT >= 34) {
-            try {
-                Intent intent = new Intent("android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT");
-                intent.setData(Uri.parse("package:" + getContext().getPackageName()));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                getContext().startActivity(intent);
-            } catch (Exception ignored) {}
+            NotificationManager nm = (NotificationManager) getContext().getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null && !nm.canUseFullScreenIntent()) {
+                try {
+                    Intent intent = new Intent("android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT");
+                    intent.setData(Uri.parse("package:" + getContext().getPackageName()));
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    getContext().startActivity(intent);
+                } catch (Exception ignored) {}
+            }
         }
         call.resolve();
     }
