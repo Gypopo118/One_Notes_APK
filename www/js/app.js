@@ -72,7 +72,6 @@
     try { render(); } catch (e) {}
 
     registerServiceWorker();
-    setupViewportAdaptation();
 
     // Всегда показываем интерфейс, даже если часть данных не загрузилась
     requestAnimationFrame(() => document.body.classList.add('ready'));
@@ -255,8 +254,7 @@
       openEditor(note);
     });
 
-    attachDrag(card, handle);
-    attachSwipe(card, swipe);
+    attachCardGesture(card, swipe, handle);
     return card;
   }
 
@@ -318,28 +316,113 @@
 	    return update;
 	  }
 
-  // ---------- Swipe-to-delete gesture ----------
-  // Started on .note-card-swipe (not on the drag handle -- that one already
-  // stops propagation for its own pointerdown, see attachDrag). CSS gives
-  // this element touch-action:none, so the browser never starts a native
-  // scroll of its own accord -- everything (horizontal reveal AND, when the
-  // gesture turns out vertical, the list/preview scroll) is driven here.
-  // That removes the previous race against Android WebView's compositor,
-  // which could start a native scroll before this handler's preventDefault()
-  // ran on a busy main thread, cancelling/reverting the horizontal swipe.
-  function attachSwipe(card, swipe) {
+  // ---------- Unified card gesture: swipe-to-delete / drag-to-reorder / scroll ----------
+  // Used to be two separate listeners: one on the handle (stopPropagation,
+  // committed to "drag" the instant pointerdown fired, no direction check
+  // at all) and one on the row (attachSwipe, direction-aware). That meant a
+  // swipe that happened to START over the handle's hit area -- the
+  // right-hand ~40px of the card, right where a natural swipe starting from
+  // the right edge lands -- never reached the swipe logic: the handle
+  // grabbed it unconditionally and the row below never even saw a
+  // pointerdown. One listener here decides direction first (same
+  // dx-vs-dy check as before) and only THEN commits to reorder (dy-dominant
+  // AND started on the handle), horizontal swipe (dx-dominant, from
+  // anywhere including the handle), or vertical list/preview scroll
+  // (dy-dominant, elsewhere). touch-action:none on both .note-card-swipe
+  // and .note-card-handle means the browser never starts anything natively
+  // on its own, so none of this races the compositor.
+  function attachCardGesture(card, swipe, handle) {
     const textEl = swipe.querySelector('.note-card-text');
     let tracking = false;
-    let decided = null; // null | 'horizontal' | 'vertical'
+    let decided = null; // null | 'horizontal' | 'vertical' | 'reorder'
+    let onHandle = false;
     let startX = 0, startY = 0, baseX = 0, lastX = 0;
     let startTarget = null;
     let vTarget = null;   // element being manually scrolled this gesture
     let vStartTop = 0;
     let lastY = 0, lastT = 0, vVelocity = 0; // for a light momentum tail
 
+    // ---- drag-to-reorder state (only used once decided === 'reorder') ----
+    let initialTop = 0, cardHeight = 0, placeholder = null;
+
+    function otherCards() {
+      return Array.from(cardsContainer.children).filter((c) => c !== card && c !== placeholder);
+    }
+
+    function startReorder() {
+      const rect = card.getBoundingClientRect();
+      initialTop = rect.top;
+      cardHeight = rect.height;
+
+      placeholder = document.createElement('div');
+      placeholder.className = 'note-card-placeholder';
+      cardsContainer.insertBefore(placeholder, card);
+
+      card.classList.add('dragging');
+      card.style.position = 'fixed';
+      card.style.top = initialTop + 'px';
+      card.style.left = rect.left + 'px';
+      card.style.width = rect.width + 'px';
+      card.style.margin = '0';
+      card.style.zIndex = '50';
+      document.body.appendChild(card);
+    }
+
+    function updateReorder(e) {
+      const dy = e.clientY - startY;
+      const newTop = initialTop + dy;
+      card.style.top = newTop + 'px';
+
+      const cardMidY = newTop + cardHeight / 2;
+      const siblings = otherCards();
+      let target = null;
+      for (const sib of siblings) {
+        const r = sib.getBoundingClientRect();
+        if (cardMidY < r.top + r.height / 2) { target = sib; break; }
+      }
+      if (target) {
+        if (placeholder.nextSibling !== target) cardsContainer.insertBefore(placeholder, target);
+      } else if (cardsContainer.lastElementChild !== placeholder) {
+        cardsContainer.appendChild(placeholder);
+      }
+
+      // Auto-scroll the list when dragging near its top/bottom edge.
+      const svRect = listView.getBoundingClientRect();
+      const edge = 48;
+      if (e.clientY < svRect.top + edge) listView.scrollTop -= 12;
+      else if (e.clientY > svRect.bottom - edge) listView.scrollTop += 12;
+    }
+
+    function finishReorder() {
+      card.classList.remove('dragging');
+      card.style.position = '';
+      card.style.top = '';
+      card.style.left = '';
+      card.style.width = '';
+      card.style.margin = '';
+      card.style.zIndex = '';
+
+      if (placeholder && placeholder.parentNode) {
+        cardsContainer.insertBefore(card, placeholder);
+        placeholder.remove();
+      } else {
+        cardsContainer.appendChild(card);
+      }
+      placeholder = null;
+
+      const ids = Array.from(cardsContainer.children).map((c) => c.dataset.id);
+      const notes = state.notesCache[state.tab];
+      ids.forEach((id, idx) => {
+        const n = notes.find((x) => x.id === id);
+        if (n) { n.order = idx; DB.putNote(n); }
+      });
+      notes.sort((a, b) => a.order - b.order);
+    }
+
     swipe.addEventListener('pointerdown', (e) => {
       tracking = true;
       decided = null;
+      onHandle = handle.contains(e.target);
       startX = e.clientX;
       startY = e.clientY;
       lastY = e.clientY;
@@ -349,10 +432,10 @@
       baseX = openSwipeCard === swipe ? -SWIPE_DELETE_WIDTH : 0;
       lastX = baseX;
       swipe.style.transition = 'none'; // instant tracking while the finger is down
-      // Captured immediately (not only once decided) since touch-action:none
-      // means nothing native will ever claim this gesture -- capturing early
-      // just guarantees we keep getting every move even if the finger
-      // strays outside the row bounds.
+      // A bare tap on the handle (no real movement) shouldn't open the
+      // editor -- mirrors the old handle-only behaviour; cleared again
+      // below once we know whether this turned into an actual gesture.
+      if (onHandle) card.dataset.wasDrag = '1';
       try { swipe.setPointerCapture(e.pointerId); } catch (err) {}
     });
 
@@ -362,10 +445,15 @@
       const dy = e.clientY - startY;
       if (!decided) {
         if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-        decided = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
-        if (decided === 'horizontal') {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          decided = 'horizontal';
+          if (onHandle) card.dataset.wasDrag = '0'; // turned out to be a swipe, not a drag
           if (openSwipeCard && openSwipeCard !== swipe) closeOpenSwipe();
+        } else if (onHandle) {
+          decided = 'reorder';
+          startReorder();
         } else {
+          decided = 'vertical';
           // Scroll the inner text preview if the gesture started over it and
           // it still has its own overflow to scroll; otherwise scroll the
           // card list itself -- mirrors the nested-scroll resolution the
@@ -379,12 +467,14 @@
       if (decided === 'horizontal') {
         lastX = Math.max(-SWIPE_DELETE_WIDTH, Math.min(0, baseX + dx));
         swipe.style.transform = `translateX(${lastX}px)`;
-      } else if (vTarget) {
+      } else if (decided === 'vertical' && vTarget) {
         vTarget.scrollTop = vStartTop - dy;
         const dt = e.timeStamp - lastT;
         if (dt > 0) vVelocity = (e.clientY - lastY) / dt; // px per ms
         lastY = e.clientY;
         lastT = e.timeStamp;
+      } else if (decided === 'reorder') {
+        updateReorder(e);
       }
     });
 
@@ -392,13 +482,27 @@
       if (!tracking) return;
       tracking = false;
       try { swipe.releasePointerCapture(e.pointerId); } catch (err) {}
+
+      if (decided === 'reorder') {
+        finishReorder();
+        decided = null;
+        setTimeout(() => { card.dataset.wasDrag = '0'; }, 50);
+        return;
+      }
       if (decided === 'vertical') {
         flingScroll(vTarget, vVelocity);
         vTarget = null;
         decided = null;
         return;
       }
-      if (decided !== 'horizontal') { decided = null; return; }
+      if (decided !== 'horizontal') {
+        // Plain tap (never crossed the direction threshold). If it started
+        // on the handle, clear the drag guard so it doesn't also swallow
+        // the click; otherwise nothing to undo.
+        if (onHandle) setTimeout(() => { card.dataset.wasDrag = '0'; }, 50);
+        decided = null;
+        return;
+      }
       swipe.style.transition = 'transform .18s ease';
       // Lower than a strict half-width so a short-but-clearly-horizontal
       // drag still commits to open rather than snapping shut.
@@ -763,137 +867,6 @@
       render();
     });
   });
-
-  // ---------- Drag-to-reorder ----------
-  // The gesture starts ONLY on the dedicated handle icon (touch-action:none
-  // there prevents the browser from treating it as a page scroll). Long-press
-  // anywhere else on the card body keeps the normal native text-selection
-  // behaviour instead of dragging.
-  // The dragged card is switched to position:fixed and follows the pointer
-  // directly (top = initialTop + totalPointerDelta) — never a value derived
-  // from the previous frame — so nothing can accumulate/drift and the card
-  // can never "fly off" the screen. A thin placeholder line is inserted
-  // into the real flex flow to show exactly where the card will land, and
-  // that placeholder (not the dragged card) is what moves between
-  // siblings, so the rest of the list never jumps or overlaps.
-  function attachDrag(card, handle) {
-    let dragging = false;
-    let startY = 0;
-    let initialTop = 0;
-    let initialLeft = 0;
-    let cardWidth = 0;
-    let cardHeight = 0;
-    let placeholder = null;
-    let scrollEl = null;
-
-    function otherCards() {
-      return Array.from(cardsContainer.children).filter((c) => c !== card && c !== placeholder);
-    }
-
-    handle.addEventListener('pointerdown', (e) => {
-      e.stopPropagation();
-      dragging = true;
-      card.dataset.wasDrag = '1';
-
-      scrollEl = listView; // .list-view is the scrollable ancestor
-      const rect = card.getBoundingClientRect();
-      initialTop = rect.top;
-      initialLeft = rect.left;
-      cardWidth = rect.width;
-      cardHeight = rect.height;
-      startY = e.clientY;
-
-      placeholder = document.createElement('div');
-      placeholder.className = 'note-card-placeholder';
-      cardsContainer.insertBefore(placeholder, card);
-
-      card.classList.add('dragging');
-      card.style.position = 'fixed';
-      card.style.top = initialTop + 'px';
-      card.style.left = initialLeft + 'px';
-      card.style.width = cardWidth + 'px';
-      card.style.margin = '0';
-      card.style.zIndex = '50';
-      document.body.appendChild(card);
-
-      try { handle.setPointerCapture(e.pointerId); } catch (err) {}
-    });
-
-    handle.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      e.preventDefault();
-      const dy = e.clientY - startY;
-      const newTop = initialTop + dy;
-      card.style.top = newTop + 'px';
-
-      const cardMidY = newTop + cardHeight / 2;
-      const siblings = otherCards();
-      let target = null;
-      for (const sib of siblings) {
-        const r = sib.getBoundingClientRect();
-        if (cardMidY < r.top + r.height / 2) { target = sib; break; }
-      }
-      if (target) {
-        if (placeholder.nextSibling !== target) cardsContainer.insertBefore(placeholder, target);
-      } else if (cardsContainer.lastElementChild !== placeholder) {
-        cardsContainer.appendChild(placeholder);
-      }
-
-      // Auto-scroll the list when dragging near its top/bottom edge.
-      if (scrollEl) {
-        const svRect = scrollEl.getBoundingClientRect();
-        const edge = 48;
-        if (e.clientY < svRect.top + edge) scrollEl.scrollTop -= 12;
-        else if (e.clientY > svRect.bottom - edge) scrollEl.scrollTop += 12;
-      }
-    });
-
-    function endDrag(e) {
-      if (!dragging) return;
-      dragging = false;
-      card.classList.remove('dragging');
-      card.style.position = '';
-      card.style.top = '';
-      card.style.left = '';
-      card.style.width = '';
-      card.style.margin = '';
-      card.style.zIndex = '';
-      try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
-
-      if (placeholder && placeholder.parentNode) {
-        cardsContainer.insertBefore(card, placeholder);
-        placeholder.remove();
-      } else {
-        cardsContainer.appendChild(card);
-      }
-      placeholder = null;
-
-      const ids = Array.from(cardsContainer.children).map((c) => c.dataset.id);
-      const notes = state.notesCache[state.tab];
-      ids.forEach((id, idx) => {
-        const n = notes.find((x) => x.id === id);
-        if (n) { n.order = idx; DB.putNote(n); }
-      });
-      notes.sort((a, b) => a.order - b.order);
-      setTimeout(() => { card.dataset.wasDrag = '0'; }, 50);
-    }
-
-    handle.addEventListener('pointerup', endDrag);
-    handle.addEventListener('pointercancel', endDrag);
-  }
-
-  // ---------- Keyboard-aware viewport height ----------
-  // Fallback for browsers that don't honour interactive-widget=resizes-content:
-  // track the visualViewport height so the app shrinks above the keyboard
-  // instead of being covered by it.
-  function setupViewportAdaptation() {
-    if (!window.visualViewport) return;
-    const apply = () => {
-      document.documentElement.style.setProperty('--app-height', window.visualViewport.height + 'px');
-    };
-    apply();
-    window.visualViewport.addEventListener('resize', apply);
-  }
 
   // ---------- Service worker ----------
   function registerServiceWorker() {

@@ -77,15 +77,23 @@ body.ready{
 }
 button{font-family:inherit;}
 
-/* Adaptive height: JS sets --app-height from visualViewport as a fallback
-   for browsers that don't honor interactive-widget=resizes-content, so the
-   whole layout (incl. the footer buttons) shrinks above the keyboard
-   instead of being covered by it. */
+/* Keyboard-safe height: 100dvh (dynamic viewport height) already tracks the
+   real visible viewport, including the on-screen keyboard, via the page's
+   own interactive-widget=resizes-content meta setting (index.html) — the
+   SAME native mechanism that also moves .bottom-nav's position:fixed, so
+   both stay in lockstep with the keyboard's own animation automatically.
+   A previous JS fallback (visualViewport-driven --app-height + its own CSS
+   transition) used to run on top of that native resize with a second,
+   differently-timed animation, which is what made the keyboard opening
+   look like a jerky two-stage jump (content first, then the nav buttons)
+   instead of one smooth slide together. Removed rather than kept as a
+   "just in case" fallback — interactive-widget has been supported by
+   Android WebView (Chromium 108+) for years, well within this app's target. */
 #app{
   position:fixed;inset:0;
-  height:var(--app-height, 100dvh);
+  height:100dvh;
+  padding-top:env(safe-area-inset-top);
   display:flex;flex-direction:column;
-  transition:height .1s ease;
 }
 
 /* ---------- Top bar (shown only while editing) ---------- */
@@ -193,6 +201,18 @@ button{font-family:inherit;}
      app.js drives both the horizontal reveal AND (when the gesture turns
      out vertical) the list/preview scrolling manually — see attachSwipe(). */
   touch-action:none;
+  /* touch-action alone isn't enough once a finger starts on top of actual
+     text characters (multi-line cards, where the preview text covers most
+     of the card) rather than empty padding: Android's native text-selection
+     long-press/drag recognizer is a SEPARATE subsystem from touch-action and
+     can still grab the gesture, which is what made the swipe reliably work
+     on short one-line cards (mostly empty background under the finger) but
+     jitter/stick on multi-line ones (finger almost always lands on text).
+     user-select:none turns that recognizer off. Same pairing already used
+     for the picker-dial drag gesture below — see .picker-dial. */
+  user-select:none;
+  -webkit-user-select:none;
+  -webkit-touch-callout:none;
 }
 
 /* Revealed by swiping .note-card-swipe left; width must match
