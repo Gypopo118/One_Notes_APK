@@ -65,6 +65,14 @@ public class AlarmService extends Service {
             return START_NOT_STICKY;
         }
 
+        // Если предыдущий будильник ещё звонит (сервис уже был запущен и
+        // не остановлен через "Остановить"/"Отложить"), останавливаем его
+        // ресурсы перед стартом нового — иначе предыдущие MediaPlayer/
+        // Vibrator/WakeLock утекают (никогда не released) и звонят одновременно.
+        if (player != null || wakeLock != null) {
+            stopRinging();
+        }
+
         currentId = intent != null ? intent.getLongExtra("id", 0) : 0;
         String title = intent != null ? intent.getStringExtra("title") : null;
         String body = intent != null ? intent.getStringExtra("body") : null;

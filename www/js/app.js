@@ -21,14 +21,11 @@
   const shoppingView = el('shoppingView');
   const shoppingTextarea = el('shoppingTextarea');
 
-  const confirmPopover = el('confirmPopover');
-  const confirmYes = el('confirmYes');
+  const undoSnackbar = el('undoSnackbar');
+  const undoLabel = el('undoLabel');
+  const undoBtn = el('undoBtn');
+  const undoRingProgress = el('undoRingProgress');
 
-  const reminderModal = el('reminderModal');
-  const reminderInput = el('reminderInput');
-  const reminderSave = el('reminderSave');
-  const reminderClear = el('reminderClear');
-  const reminderCancel = el('reminderCancel');
   const toast = el('toast');
 
   const navBtns = Array.from(document.querySelectorAll('.nav-btn'));
@@ -46,7 +43,6 @@
     mode: 'list',             // 'list' | 'editor' | 'composer'  (ignored for the shopping/notebook tab)
     notesCache: { urgent: [], plans: [], buy: [] },
     currentNote: null,        // note being edited/composed — same object for both modes
-    pendingDeleteId: null,
     shoppingSaveTimer: null,
     justCreatedId: null,      // note id to play the "enter" animation for, once
   };
@@ -66,7 +62,11 @@
     try { await loadNotes('buy'); } catch (e) {}
 
     try { Reminders.rearm([...state.notesCache.urgent, ...state.notesCache.plans, ...state.notesCache.buy]); } catch (e) {}
-    try { Reminders.ensureAlarmSetup(); } catch (e) {}
+    // ensureAlarmSetup() (запрос точных будильников/full-screen intent/игнора
+    // батарейной оптимизации) НЕ вызывается тут: системные диалоги не должны
+    // всплывать при каждом холодном старте. Вызывается один раз — при первом
+    // реальном сохранении напоминания пользователем, см. ensureAlarmSetupOnce()
+    // и его вызов в обработчике reminderBtn ниже.
 
     try { await updateShoppingBadge(); } catch (e) {}
 
@@ -166,6 +166,25 @@
     notes.forEach((note) => cardsContainer.appendChild(buildCard(note)));
   }
 
+  // Свайп влево на плашке (не свайп на самой ручке-хендле — та занята
+  // drag-to-reorder) открывает корзину, спрятанную за правым краем.
+  // Одновременно открыта только одна плашка — открытие новой закрывает
+  // предыдущую. Ширина зоны корзины должна совпадать с CSS
+  // (.note-card-delete-reveal width).
+  const SWIPE_DELETE_WIDTH = 76;
+  let openSwipeCard = null; // DOM-элемент .note-card-swipe текущей открытой плашки, либо null
+
+  function closeOpenSwipe() {
+    if (openSwipeCard) {
+      openSwipeCard.style.transform = '';
+      openSwipeCard = null;
+    }
+  }
+
+  document.addEventListener('click', (e) => {
+    if (openSwipeCard && !openSwipeCard.contains(e.target)) closeOpenSwipe();
+  });
+
   function buildCard(note) {
     const card = document.createElement('div');
     card.className = 'note-card';
@@ -175,65 +194,70 @@
       state.justCreatedId = null; // one-shot
     }
 
+    // Корзина лежит НИЖЕ свайп-слоя (в DOM раньше него), поэтому пока
+    // .note-card-swipe не сдвинут — она полностью им закрыта.
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'note-card-delete-reveal';
+    deleteBtn.type = 'button';
+    deleteBtn.setAttribute('aria-label', 'Удалить');
+    deleteBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteNoteWithUndo(note.id);
+    });
+    card.appendChild(deleteBtn);
+
+    const swipe = document.createElement('div');
+    swipe.className = 'note-card-swipe';
+
     // Preview text is independently scrollable (swipe up/down) before the
     // card is opened; a slim custom thumb tracks the scroll position.
     // The track lives OUTSIDE the scrollable text container (as a sibling
-    // inside .note-card) so its position is never affected by scrolling.
+    // inside .note-card-swipe) so its position is never affected by scrolling.
     const textOuter = document.createElement('div');
     textOuter.className = 'note-card-text';
     const textInner = document.createElement('div');
     textInner.className = 'note-card-text-inner';
     textInner.textContent = note.text || '';
     textOuter.appendChild(textInner);
-    card.appendChild(textOuter);
+    swipe.appendChild(textOuter);
 
     const track = document.createElement('div');
     track.className = 'note-scroll-track';
     const thumb = document.createElement('div');
     thumb.className = 'note-scroll-thumb';
     track.appendChild(thumb);
-    card.appendChild(track);
-    attachScrollThumb(card, textOuter, thumb);
+    swipe.appendChild(track);
+    attachScrollThumb(swipe, textOuter, thumb);
 
     const meta = document.createElement('div');
     meta.className = 'note-card-meta';
-    meta.innerHTML = `<span>${formatDateTime(note.createdAt)}</span>`;
+    meta.innerHTML = `<span class="note-card-date">${formatDateTime(note.createdAt)}</span>`;
     if (note.reminderAt) {
       const chip = document.createElement('span');
       chip.className = 'reminder-chip';
       chip.textContent = 'Уведомление ' + formatDateTime(note.reminderAt);
       meta.appendChild(chip);
     }
-    card.appendChild(meta);
-
-    const controls = document.createElement('div');
-    controls.className = 'note-card-controls';
-
-    const trash = document.createElement('button');
-    trash.className = 'note-card-trash';
-    trash.type = 'button';
-    trash.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 12a1 1 0 001 1h6a1 1 0 001-1l1-12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    trash.addEventListener('click', (e) => {
-      e.stopPropagation();
-      showDeleteConfirm(trash, note.id);
-    });
-    controls.appendChild(trash);
+    swipe.appendChild(meta);
 
     const handle = document.createElement('button');
     handle.className = 'note-card-handle';
     handle.type = 'button';
     handle.setAttribute('aria-label', 'Перетащить');
-    handle.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="9" cy="6" r="1.4" fill="currentColor"/><circle cx="15" cy="6" r="1.4" fill="currentColor"/><circle cx="9" cy="12" r="1.4" fill="currentColor"/><circle cx="15" cy="12" r="1.4" fill="currentColor"/><circle cx="9" cy="18" r="1.4" fill="currentColor"/><circle cx="15" cy="18" r="1.4" fill="currentColor"/></svg>';
-    controls.appendChild(handle);
+    handle.innerHTML = '<svg viewBox="0 0 20 36" width="16" height="30"><circle cx="6" cy="3" r="1.4" fill="currentColor"/><circle cx="14" cy="3" r="1.4" fill="currentColor"/><circle cx="6" cy="9" r="1.4" fill="currentColor"/><circle cx="14" cy="9" r="1.4" fill="currentColor"/><circle cx="6" cy="15" r="1.4" fill="currentColor"/><circle cx="14" cy="15" r="1.4" fill="currentColor"/><circle cx="6" cy="21" r="1.4" fill="currentColor"/><circle cx="14" cy="21" r="1.4" fill="currentColor"/><circle cx="6" cy="27" r="1.4" fill="currentColor"/><circle cx="14" cy="27" r="1.4" fill="currentColor"/><circle cx="6" cy="33" r="1.4" fill="currentColor"/><circle cx="14" cy="33" r="1.4" fill="currentColor"/></svg>';
+    swipe.appendChild(handle);
 
-    card.appendChild(controls);
+    card.appendChild(swipe);
 
-    card.addEventListener('click', () => {
-      if (card.dataset.wasDrag === '1') return;
+    swipe.addEventListener('click', () => {
+      if (card.dataset.wasDrag === '1' || card.dataset.wasSwipe === '1') return;
+      if (openSwipeCard === swipe) { closeOpenSwipe(); return; }
       openEditor(note);
     });
 
     attachDrag(card, handle);
+    attachSwipe(card, swipe);
     return card;
   }
 
@@ -295,32 +319,118 @@
 	    return update;
 	  }
 
-  // ---------- Delete confirm popover (appears over the trash icon; tap
-  // outside cancels — no separate "Нет" button) ----------
-  function showDeleteConfirm(anchorEl, noteId) {
-    state.pendingDeleteId = noteId;
-    const rect = anchorEl.getBoundingClientRect();
-    confirmPopover.style.top = `${rect.top - 6}px`;
-    confirmPopover.style.left = `${Math.max(8, rect.right - 120)}px`;
-    confirmPopover.classList.remove('hidden');
+  // ---------- Swipe-to-delete gesture ----------
+  // Started on .note-card-swipe (not on the drag handle — that one already
+  // stops propagation for its own pointerdown, see attachDrag). Direction
+  // (horizontal swipe vs vertical list/text scroll) is decided from the
+  // first few pixels of movement so it never fights the page's own
+  // vertical scrolling or the card-preview's own vertical text scroll.
+  function attachSwipe(card, swipe) {
+    let tracking = false;
+    let decided = null; // null | 'horizontal' | 'vertical'
+    let startX = 0, startY = 0, baseX = 0, lastX = 0;
+
+    swipe.addEventListener('pointerdown', (e) => {
+      tracking = true;
+      decided = null;
+      startX = e.clientX;
+      startY = e.clientY;
+      baseX = openSwipeCard === swipe ? -SWIPE_DELETE_WIDTH : 0;
+      lastX = baseX;
+    });
+
+    swipe.addEventListener('pointermove', (e) => {
+      if (!tracking) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!decided) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        decided = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
+        if (decided === 'horizontal') {
+          if (openSwipeCard && openSwipeCard !== swipe) closeOpenSwipe();
+          try { swipe.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+      }
+      if (decided !== 'horizontal') return;
+      e.preventDefault();
+      lastX = Math.max(-SWIPE_DELETE_WIDTH, Math.min(0, baseX + dx));
+      swipe.style.transform = `translateX(${lastX}px)`;
+    });
+
+    function endDrag(e) {
+      if (!tracking) return;
+      tracking = false;
+      if (decided !== 'horizontal') { decided = null; return; }
+      try { swipe.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (lastX < -SWIPE_DELETE_WIDTH / 2) {
+        swipe.style.transform = `translateX(${-SWIPE_DELETE_WIDTH}px)`;
+        openSwipeCard = swipe;
+      } else {
+        swipe.style.transform = '';
+        if (openSwipeCard === swipe) openSwipeCard = null;
+      }
+      card.dataset.wasSwipe = '1';
+      decided = null;
+      setTimeout(() => { card.dataset.wasSwipe = '0'; }, 50);
+    }
+    swipe.addEventListener('pointerup', endDrag);
+    swipe.addEventListener('pointercancel', endDrag);
   }
-  function hideDeleteConfirm() {
-    confirmPopover.classList.add('hidden');
-    state.pendingDeleteId = null;
-  }
-  confirmYes.addEventListener('click', async () => {
-    if (!state.pendingDeleteId) return;
-    const id = state.pendingDeleteId;
+
+  // ---------- Delete with undo ----------
+  // The note is removed from DB immediately (its reminder cancelled), but a
+  // snackbar with a 5s shrinking ring offers to restore it — see undoBtn
+  // handler below.
+  let undoState = null; // { note, tab, timer } | null
+  const UNDO_MS = 5000;
+
+  async function deleteNoteWithUndo(id) {
+    const notes = state.notesCache[state.tab];
+    const note = notes.find((n) => n.id === id);
+    if (!note) return;
+    closeOpenSwipe();
+
+    const cardEl = cardsContainer.querySelector(`[data-id="${id}"]`);
+    if (cardEl) {
+      cardEl.classList.add('note-card-exit');
+      await new Promise((r) => setTimeout(r, 180));
+    }
+
     Reminders.cancel(id);
     await DB.deleteNote(id);
     await loadNotes(state.tab);
-    hideDeleteConfirm();
     render();
-  });
-  document.addEventListener('click', (e) => {
-    if (!confirmPopover.classList.contains('hidden') && !confirmPopover.contains(e.target)) {
-      hideDeleteConfirm();
-    }
+    showUndoSnackbar(note, state.tab);
+  }
+
+  function showUndoSnackbar(note, tab) {
+    if (undoState) clearTimeout(undoState.timer);
+    undoState = { note, tab, timer: null };
+    undoLabel.textContent = 'Заметка удалена';
+    undoSnackbar.classList.remove('hidden');
+
+    // CSS keyframe animation (not a JS-driven transition) so it isn't at the
+    // mercy of requestAnimationFrame throttling; restarted via the classic
+    // remove-class -> force reflow -> re-add-class trick.
+    undoRingProgress.classList.remove('counting');
+    void undoRingProgress.getBoundingClientRect(); // force reflow to restart the animation
+    undoRingProgress.classList.add('counting');
+
+    undoState.timer = setTimeout(() => {
+      undoSnackbar.classList.add('hidden');
+      undoState = null;
+    }, UNDO_MS);
+  }
+
+  undoBtn.addEventListener('click', async () => {
+    if (!undoState) return;
+    clearTimeout(undoState.timer);
+    const { note, tab } = undoState;
+    undoState = null;
+    undoSnackbar.classList.add('hidden');
+    await DB.putNote(note);
+    await loadNotes(tab);
+    if (tab === state.tab) render(); else updateNoteBadges();
   });
 
   // ---------- Opening a note: composer (new) or editor (existing) ----------
@@ -430,7 +540,15 @@
     if (state.mode === 'editor' || state.mode === 'composer') history.back();
   });
 
-  window.addEventListener('popstate', () => {
+  // Слоистая история: у пикера даты/времени (см. datetime-picker.js) своя
+  // запись поверх редактора. Когда "назад" всплывает сюда и мы приземлились
+  // ИМЕННО на слое редактора — значит, слой НАД ним (пикер) только что сам
+  // себя закрыл через свой собственный popstate-листенер; редактор трогать
+  // не нужно. Закрываем редактор только когда посадка происходит "в корень"
+  // (никакого известного слоя над ним больше нет).
+  window.addEventListener('popstate', (e) => {
+    const landedOnSubview = e.state && e.state.subview;
+    if (landedOnSubview === 'editor' || landedOnSubview === 'composer') return;
     if (state.mode === 'editor' || state.mode === 'composer') {
       closeAndReturnToList();
     }
@@ -495,18 +613,27 @@
   }
 
   // ---------- Reminder modal ----------
-  reminderBtn.addEventListener('click', () => {
-    if (!state.currentNote) return;
-    const d = state.currentNote.reminderAt ? new Date(state.currentNote.reminderAt) : new Date(Date.now() + 30 * 60000);
-    reminderInput.value = toLocalInputValue(d);
-    reminderModal.classList.remove('hidden');
-  });
-  reminderCancel.addEventListener('click', () => reminderModal.classList.add('hidden'));
-  reminderModal.addEventListener('click', (e) => { if (e.target === reminderModal) reminderModal.classList.add('hidden'); });
+  // Системные диалоги (точные будильники / full-screen intent / игнор
+  // батарейной оптимизации) запрашиваются один раз — при первом реальном
+  // сохранении напоминания, а не на каждом холодном старте приложения.
+  const ALARM_SETUP_DONE_KEY = 'mynotes_alarm_setup_done';
+  async function ensureAlarmSetupOnce() {
+    try {
+      if (localStorage.getItem(ALARM_SETUP_DONE_KEY) === '1') return;
+      await Reminders.ensureAlarmSetup();
+      localStorage.setItem(ALARM_SETUP_DONE_KEY, '1');
+    } catch (e) {}
+  }
 
-  reminderClear.addEventListener('click', async () => {
-    reminderModal.classList.add('hidden');
-    if (state.currentNote) {
+  // Открывает кастомный пикер (календарь -> циферблат) напрямую по тапу —
+  // без промежуточного экрана; результат: timestamp | 'clear' | null.
+  reminderBtn.addEventListener('click', async () => {
+    if (!state.currentNote) return;
+    const initial = state.currentNote.reminderAt || (Date.now() + 30 * 60000);
+    const result = await DateTimePicker.pick(initial, { canClear: !!state.currentNote.reminderAt });
+    if (result === null || !state.currentNote) return;
+
+    if (result === 'clear') {
       const id = state.currentNote.id;
       state.currentNote.reminderAt = null;
       reminderBtn.classList.remove('set');
@@ -518,31 +645,18 @@
         renderCards();
         updateNoteBadges();
       } catch (e) {}
-    }
-  });
-
-  reminderSave.addEventListener('click', async () => {
-    if (!state.currentNote || !reminderInput.value) {
-      reminderModal.classList.add('hidden');
-      return;
-    }
-    const ts = new Date(reminderInput.value).getTime();
-    if (isNaN(ts)) {
-      reminderModal.classList.add('hidden');
       return;
     }
 
-    // 1. Мгновенно закрываем модальное окно
-    reminderModal.classList.add('hidden');
-
+    const ts = result;
     const prevReminderAt = state.currentNote.reminderAt;
     state.currentNote.reminderAt = ts;
 
-    // 2. Оптимистично обновляем кнопку в редакторе
+    // Оптимистично обновляем кнопку в редакторе
     reminderBtn.classList.add('set');
     reminderBtn.textContent = reminderLabel(state.currentNote);
 
-    // 3. Сохраняем в локальную БД
+    // Сохраняем в локальную БД
     try {
       await DB.putNote(state.currentNote);
       await loadNotes(state.tab);
@@ -550,7 +664,8 @@
       updateNoteBadges();
     } catch (e) {}
 
-    // 4. Фоново вызываем нативный будильник
+    // Фоново вызываем нативный будильник
+    await ensureAlarmSetupOnce();
     const preview = (state.currentNote.text || '').split('\n')[0].slice(0, 60) || 'Заметка';
     try {
       await Reminders.schedule(state.currentNote.id, ts, 'Будильник', preview);
@@ -569,11 +684,6 @@
       showToast(err.message || 'Не удалось включить будильник: нет разрешения');
     }
   });
-
-  function toLocalInputValue(d) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-  }
 
   // ---------- Shopping tabs (accumulating autosave field) ----------
   async function showShopping(tab) {

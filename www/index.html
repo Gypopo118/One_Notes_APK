@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, interactive-widget=resizes-content">
-<meta name="theme-color" content="#333335">
+<meta name="theme-color" content="#17111f">
 <title>Заметки</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<style>html,body{background:#333335;}</style>
+<style>html,body{background:#17111f;}</style>
 <link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
@@ -70,27 +70,23 @@
     </div>
   </section>
 
-  <!-- Inline confirm overlay for delete (positioned over the trash icon) -->
-  <div id="confirmPopover" class="confirm-popover hidden">
-    <span class="confirm-label">Удалить?</span>
-    <button id="confirmYes" class="confirm-yes">Да</button>
-  </div>
-
-  <!-- Reminder set/edit modal -->
-  <div id="reminderModal" class="modal-backdrop hidden">
-    <div class="modal-sheet">
-      <h3>Установить срок</h3>
-      <input id="reminderInput" type="datetime-local">
-      <div class="modal-actions">
-        <button id="reminderCancel" class="modal-cancel" type="button">Отмена</button>
-        <button id="reminderClear" class="modal-clear" type="button">Убрать</button>
-        <button id="reminderSave" class="modal-save" type="button">Сохранить</button>
-      </div>
-    </div>
-  </div>
+  <!-- Reminder date/time picker (calendar + clock dial) is built entirely
+       by js/datetime-picker.js and appended to <body> only while open —
+       see DateTimePicker.pick() in that file. -->
 
   <!-- Toast notification -->
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <!-- Undo-delete snackbar: shown for a few seconds after swipe-deleting a
+       note, with a shrinking ring counting down until the delete is final. -->
+  <div id="undoSnackbar" class="undo-snackbar hidden">
+    <span id="undoLabel">Заметка удалена</span>
+    <button id="undoBtn" class="undo-snackbar-btn" type="button">Отменить</button>
+    <svg class="undo-ring" viewBox="0 0 32 32" width="26" height="26">
+      <circle class="undo-ring-track" cx="16" cy="16" r="14"/>
+      <circle id="undoRingProgress" class="undo-ring-progress" cx="16" cy="16" r="14"/>
+    </svg>
+  </div>
 
   <!-- Bottom navigation -->
   <nav id="bottomNav" class="bottom-nav">
@@ -120,6 +116,7 @@
 
 <script src="js/db.js?v=4"></script>
 <script src="js/reminders.js?v=4"></script>
+<script src="js/datetime-picker.js?v=4"></script>
 <script src="js/app.js?v=4"></script>
 </body>
 </html>

@@ -1,21 +1,35 @@
 :root{
-  /* Dark theme — enabled by default (not tied to system preference) */
-  --bg: #333335;
-  --card: #1B1A19;
-  --card-border: #2E2C2A;
+  /* Dark purple theme — enabled by default (not tied to system preference) */
+  --bg: #17111f;
+  --bg-gradient: radial-gradient(ellipse 130% 70% at 50% -8%, #3a2265 0%, #241740 32%, #150f22 65%, #0e0a17 100%);
+  --card: #241a35;
+  --card-border: #3a2a55;
   --ink: #F8F5EF;
   --ink-soft: #F3ECD9;
-  --control-bg: #48474A;
-  --control-border: #57565A;
+  --ink-dim: #9384b0; /* muted purple-gray for secondary/low-priority text, e.g. card dates */
+  --control-bg: #382a4d;
+  --control-border: #4a3a66;
+
+  /* "Glass" surfaces: translucent panels with a light-catching top edge,
+     used for cards/editor/nav/sheets — see individual selectors below. */
+  --glass-bg: rgba(255,255,255,0.055);
+  --glass-bg-strong: rgba(255,255,255,0.09);
+  --glass-border: rgba(255,255,255,0.13);
+  --glass-highlight: rgba(255,255,255,0.30);
+  --glass-blur: 20px;
 
   --accent-urgent: #FF7A6E;
   --accent-urgent-bg: rgba(255,122,110,0.16);
+  --accent-urgent-glow: rgba(255,122,110,0.55);
   --accent-plans: #C9C0AC;
   --accent-plans-bg: rgba(201,192,172,0.14);
+  --accent-plans-glow: rgba(201,192,172,0.5);
   --accent-buy: #6FCB8F;
   --accent-buy-bg: rgba(111,203,143,0.16);
+  --accent-buy-glow: rgba(111,203,143,0.55);
   --accent-notebook: #7FA8F0;
   --accent-notebook-bg: rgba(127,168,240,0.16);
+  --accent-notebook-glow: rgba(127,168,240,0.55);
   --accent-fab: #C08A3E;
   --accent-fab-ink: #1B1A19;
   --danger: #FF7A6E;
@@ -29,7 +43,9 @@
 *{box-sizing:border-box;}
 html,body{
   margin:0;padding:0;height:100%;
-  background:var(--bg);
+  background:var(--bg-gradient);
+  background-color:var(--bg);
+  background-attachment:fixed;
   color:var(--ink);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   -webkit-tap-highlight-color:transparent;
@@ -74,7 +90,11 @@ button{font-family:inherit;}
   min-height:var(--topbar-height);
   display:flex;align-items:center;justify-content:space-between;
   padding:0 12px;
-  background:var(--bg);
+  background:var(--glass-bg);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  border-bottom:1px solid var(--glass-border);
+  box-shadow:inset 0 1px 0 var(--glass-highlight);
   z-index:20;
 }
 .topbar.hidden{display:none;}
@@ -118,21 +138,61 @@ button{font-family:inherit;}
 .cards-container{
   display:flex;flex-direction:column;gap:8px;
 }
+/* Outer wrapper: clips the swiped-open content to the card's rounded
+   corners and hosts the delete button that sits BEHIND the swipe layer
+   (revealed only once .note-card-swipe is translated left). Its own height
+   is driven by .note-card-swipe (normal flow child); the delete button is
+   absolutely positioned and doesn't affect it. */
 .note-card{
   position:relative;
-  background:var(--card);
-  border:1px solid var(--card-border);
   border-radius:var(--radius-lg);
-  padding:12px 52px 10px 20px;
-  min-height:88px; /* keeps the trash+handle column from overflowing on a single short line */
-  cursor:pointer;
-  transition:transform .12s ease, box-shadow .12s ease;
+  overflow:hidden;
+  max-height:500px;
+  transition:transform .12s ease, box-shadow .12s ease, opacity .18s ease, max-height .18s ease;
 }
 .note-card.dragging{
   box-shadow:0 10px 24px rgba(0,0,0,0.4);
   transform:scale(1.02);
   pointer-events:none;
 }
+.note-card-exit{
+  opacity:0;
+  max-height:0;
+  transform:scale(0.97);
+}
+
+/* The visible, swipeable card body — everything that used to live directly
+   on .note-card now lives here, so it can slide via transform:translateX()
+   without moving the outer wrapper (used for drag-to-reorder positioning).
+   Deliberately OPAQUE (no backdrop-filter) unlike the other glass surfaces:
+   .note-card-delete-reveal sits directly behind it at all times (revealed
+   by the swipe, not by transparency), and a blurred backdrop would bleed
+   its red through the card — and turn the trash icon into a fuzzy smear —
+   even at rest. The "glass" look here comes only from the light-catching
+   border/inset highlight, not from see-through blur. */
+.note-card-swipe{
+  position:relative;
+  background:var(--card);
+  border:1px solid var(--glass-border);
+  border-radius:var(--radius-lg);
+  box-shadow:inset 0 1px 0 var(--glass-highlight), 0 4px 18px rgba(0,0,0,0.3);
+  padding:12px 46px 10px 20px;
+  min-height:88px;
+  cursor:pointer;
+  touch-action:pan-y; /* vertical list/text scroll stays native; horizontal is ours (JS) */
+}
+
+/* Revealed by swiping .note-card-swipe left; width must match
+   SWIPE_DELETE_WIDTH in app.js. */
+.note-card-delete-reveal{
+  position:absolute;top:0;right:0;bottom:0;
+  width:76px;
+  border:none;
+  background:var(--danger);
+  color:#1B1A19;
+  display:flex;align-items:center;justify-content:center;
+}
+.note-card-delete-reveal:active{opacity:0.85;}
 
 /* Thin highlighted line shown in the real list flow while dragging, marking
    exactly where the card will be inserted on drop. */
@@ -183,28 +243,33 @@ button{font-family:inherit;}
   opacity:0.65;
 }
 .note-card-meta{
-  margin-top:6px;font-size:12px;color:var(--ink-soft);
+  margin-top:6px;
   display:flex;align-items:center;gap:6px;flex-wrap:wrap;
 }
+/* The plain creation date — deliberately dim/muted and smaller than the
+   note text (15px) so it reads as secondary metadata, not content, and
+   doesn't clutter the list. */
+.note-card-date{
+  font-size:11px;
+  color:var(--ink-dim);
+}
 .note-card-meta .reminder-chip{
+  font-size:12px;
   color:var(--accent-urgent);
   font-weight:600;
 }
 
-/* Trash + drag-handle stack in the top-right corner of the card */
-.note-card-controls{
-  position:absolute;top:50%;right:8px;
+/* Drag handle only now (trash removed — deletion is swipe-to-reveal, see
+   .note-card-delete-reveal above). Centered vertically regardless of card
+   height, and taller than it is wide so it stays visible/gripable even as
+   the card grows with content. */
+.note-card-handle{
+  position:absolute;top:50%;right:10px;
   transform:translateY(-50%);
-  display:flex;flex-direction:column;align-items:center;gap:2px;
-}
-.note-card-trash, .note-card-handle{
-  width:34px;height:34px;border-radius:50%;
+  width:30px;height:56px;border-radius:15px;
   border:none;background:transparent;color:var(--ink-soft);
   display:flex;align-items:center;justify-content:center;
-}
-.note-card-trash:active{background:rgba(255,255,255,0.08);}
-.note-card-handle{
-  touch-action:none; /* the drag gesture starts here, never as page scroll */
+  touch-action:none; /* the drag-to-reorder gesture starts here, never as page scroll */
   cursor:grab;
 }
 .note-card-handle:active{cursor:grabbing;background:rgba(255,255,255,0.08);}
@@ -244,12 +309,17 @@ button{font-family:inherit;}
 .editor-card{
   flex:1;min-height:0;
   display:flex;flex-direction:column;
-  background:var(--card);
-  border:1px solid var(--card-border);
+  background:var(--glass-bg);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  border:1px solid var(--glass-border);
   border-radius:var(--radius-lg);
-  box-shadow:0 8px 24px rgba(0,0,0,0.3);
+  box-shadow:inset 0 1px 0 var(--glass-highlight), 0 8px 24px rgba(0,0,0,0.35);
   overflow:hidden;
   transform-origin:top left;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))){
+  .editor-card{background:var(--card);}
 }
 .editor-textarea{
   flex:1;width:100%;min-height:0;
@@ -293,23 +363,38 @@ button{font-family:inherit;}
   padding:18px;
 }
 
-/* ---------- Inline delete confirm popover ---------- */
-.confirm-popover{
+/* ---------- Undo-delete snackbar ---------- */
+.undo-snackbar{
   position:fixed;
-  display:flex;align-items:center;gap:6px;
-  background:var(--control-bg);color:var(--ink);
+  left:50%;bottom:calc(var(--nav-height) + 18px);
+  transform:translateX(-50%);
+  display:flex;align-items:center;gap:10px;
+  background:#1B1A19;color:var(--ink);
   border:1px solid var(--control-border);
-  border-radius:14px;
-  padding:6px 8px;
-  font-size:13px;
-  z-index:30;
-  box-shadow:0 6px 16px rgba(0,0,0,0.35);
+  border-radius:16px;
+  padding:10px 12px 10px 16px;
+  font-size:14px;
+  z-index:45;
+  box-shadow:0 8px 24px rgba(0,0,0,0.5);
+  max-width:calc(100vw - 32px);
 }
-.confirm-popover.hidden{display:none;}
-.confirm-label{padding-left:4px;white-space:nowrap;}
-.confirm-yes{
-  border:none;border-radius:10px;padding:6px 12px;font-size:13px;font-weight:600;
-  background:var(--danger);color:#1B1A19;
+.undo-snackbar.hidden{display:none;}
+.undo-snackbar-btn{
+  border:none;background:transparent;color:var(--accent-notebook);
+  font-weight:700;font-size:14px;padding:6px 4px;white-space:nowrap;
+}
+.undo-ring{flex-shrink:0;transform:rotate(-90deg);}
+.undo-ring-track{fill:none;stroke:var(--control-bg);stroke-width:3;}
+.undo-ring-progress{
+  fill:none;stroke:var(--accent-notebook);stroke-width:3;stroke-linecap:round;
+  stroke-dasharray:87.96;stroke-dashoffset:0;
+}
+.undo-ring-progress.counting{
+  animation:undoRingShrink 5000ms linear forwards;
+}
+@keyframes undoRingShrink{
+  from{stroke-dashoffset:0;}
+  to{stroke-dashoffset:87.96;}
 }
 
 /* ---------- Bottom navigation ---------- */
@@ -318,20 +403,31 @@ button{font-family:inherit;}
   height:var(--nav-height);
   display:flex;gap:8px;
   padding:8px 10px calc(10px + env(safe-area-inset-bottom)) 10px;
-  background:var(--bg);
+  background:var(--glass-bg);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  border-top:1px solid var(--glass-border);
+  box-shadow:inset 0 1px 0 var(--glass-highlight);
   z-index:25;
 }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))){
+  .bottom-nav{background:var(--bg);}
+}
+/* Glass pill per tab. Inactive tabs keep a dark, neutral (non-accent-colored)
+   border/glow — only the icon/text stay tinted in the tab's own accent hue
+   (see .nav-urgent etc below). The active tab's border and glow switch to
+   that same accent color and get noticeably brighter — see .nav-*.active. */
 .nav-btn{
   position:relative;
   flex:1;
-  border:2px solid transparent;
+  border:1.5px solid var(--glass-border);
   border-radius:20px;
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:3px;
   padding:8px 4px;
   font-size:12px;font-weight:600;line-height:1.15;
-  background:var(--accent-plans-bg);
-  color:var(--accent-plans);
+  background:var(--glass-bg);
+  transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;
 }
 .nav-badge{
   position:absolute;top:4px;left:8px;
@@ -347,39 +443,164 @@ button{font-family:inherit;}
   background:currentColor;
 }
 .nav-badge.hidden{display:none;}
-.nav-urgent{background:var(--accent-urgent-bg);color:var(--accent-urgent);}
-.nav-plans{background:var(--accent-plans-bg);color:var(--accent-plans);}
-.nav-buy{background:var(--accent-buy-bg);color:var(--accent-buy);}
-.nav-notebook{background:var(--accent-notebook-bg);color:var(--accent-notebook);}
+.nav-urgent{color:var(--accent-urgent);}
+.nav-plans{color:var(--accent-plans);}
+.nav-buy{color:var(--accent-buy);}
+.nav-notebook{color:var(--accent-notebook);}
 
 .nav-btn.active{border-color:currentColor;}
+.nav-urgent.active{
+  background:var(--accent-urgent-bg);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.3), 0 0 16px 2px var(--accent-urgent-glow);
+}
+.nav-plans.active{
+  background:var(--accent-plans-bg);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.3), 0 0 16px 2px var(--accent-plans-glow);
+}
+.nav-buy.active{
+  background:var(--accent-buy-bg);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.3), 0 0 16px 2px var(--accent-buy-glow);
+}
+.nav-notebook.active{
+  background:var(--accent-notebook-bg);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.3), 0 0 16px 2px var(--accent-notebook-glow);
+}
 
-/* ---------- Reminder modal ---------- */
+/* ---------- Reminder modal (backdrop shared with the date/time picker) ---------- */
 .modal-backdrop{
   position:fixed;inset:0;background:rgba(0,0,0,0.55);
   display:flex;align-items:flex-end;justify-content:center;
   z-index:40;
+  animation:modalFadeIn .18s ease;
 }
-.modal-backdrop.hidden{display:none;}
+@keyframes modalFadeIn{from{opacity:0;}to{opacity:1;}}
 .modal-sheet{
   width:100%;max-width:480px;
-  background:var(--bg);
+  background:var(--glass-bg-strong);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  border:1px solid var(--glass-border);
+  border-bottom:none;
+  box-shadow:inset 0 1px 0 var(--glass-highlight), 0 -8px 30px rgba(0,0,0,0.35);
   border-radius:24px 24px 0 0;
-  padding:20px 20px calc(20px + env(safe-area-inset-bottom));
+  padding:16px 20px calc(16px + env(safe-area-inset-bottom));
 }
-.modal-sheet h3{margin:0 0 14px 0;font-size:17px;color:var(--ink);}
-.modal-sheet input[type="datetime-local"]{
-  width:100%;padding:12px;border-radius:14px;border:1px solid var(--control-border);
-  font-size:16px;background:var(--card);color:var(--ink);
-  color-scheme:dark;
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))){
+  .modal-sheet{background:var(--bg);}
 }
-.modal-actions{display:flex;gap:10px;margin-top:16px;}
-.modal-actions button{
-  flex:1;padding:13px;border-radius:14px;border:none;font-size:15px;font-weight:600;
+
+/* ---------- Date/time picker (calendar + clock dial) ---------- */
+.picker-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px;
 }
-.modal-cancel{background:var(--control-bg);color:var(--ink);}
-.modal-clear{background:var(--accent-urgent-bg);color:var(--accent-urgent);}
-.modal-save{background:var(--ink);color:#1B1A19;}
+.picker-title{font-size:16px;font-weight:600;color:var(--ink);text-transform:capitalize;}
+.picker-icon-btn{
+  width:38px;height:38px;border-radius:50%;
+  border:none;background:transparent;color:var(--ink-soft);
+  font-size:18px;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+}
+.picker-icon-btn:active{background:rgba(255,255,255,0.08);}
+
+.picker-weekdays{
+  display:grid;grid-template-columns:repeat(7,1fr);
+  margin-bottom:4px;
+}
+.picker-weekdays span{
+  text-align:center;font-size:12px;color:var(--ink-soft);padding:6px 0;
+}
+.picker-days{
+  display:grid;grid-template-columns:repeat(7,1fr);
+  gap:2px;
+}
+.picker-day{
+  aspect-ratio:1;border:none;background:transparent;color:var(--ink);
+  border-radius:50%;font-size:14px;
+  display:flex;align-items:center;justify-content:center;
+}
+.picker-day.dim{color:var(--ink-soft);opacity:0.4;}
+.picker-day.today{color:var(--accent-notebook);font-weight:700;}
+.picker-day.selected{background:var(--accent-notebook);color:#1B1A19;font-weight:700;}
+
+.picker-digital{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  margin:6px 0 18px 0;
+}
+.picker-digital-seg{
+  border:none;border-radius:14px;
+  background:var(--control-bg);color:var(--ink);
+  font-size:32px;font-weight:700;
+  padding:6px 16px;min-width:76px;
+  font-variant-numeric:tabular-nums;
+}
+.picker-digital-seg.active{
+  background:var(--accent-notebook-bg);color:var(--accent-notebook);
+}
+.picker-digital-colon{font-size:28px;color:var(--ink-soft);font-weight:700;}
+
+.picker-dial{
+  position:relative;
+  margin:0 auto 8px auto;
+  border-radius:50%;
+  background:var(--control-bg);
+  touch-action:none;
+  user-select:none;
+}
+.picker-dial-number{
+  position:absolute;
+  transform:translate(-50%,-50%);
+  font-size:17px;color:var(--ink);
+  width:32px;height:32px;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+}
+.picker-dial-number.inner{
+  font-size:13px;color:var(--ink-soft);
+}
+.picker-hand{
+  position:absolute;left:50%;top:50%;
+  height:2px;background:var(--accent-notebook);
+  transform-origin:0 50%;
+  pointer-events:none;
+}
+.picker-chip{
+  position:absolute;
+  width:40px;height:40px;
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  background:var(--accent-notebook);
+  color:#1B1A19;font-size:15px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+  font-variant-numeric:tabular-nums;
+}
+
+.picker-manual{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:36px 0;
+}
+.picker-manual-input{
+  width:84px;padding:12px;border-radius:14px;border:1px solid var(--control-border);
+  font-size:24px;text-align:center;background:var(--card);color:var(--ink);
+}
+
+.picker-footer{
+  display:flex;align-items:center;gap:8px;
+  margin-top:14px;
+}
+.picker-footer-spacer{flex:1;}
+.picker-link{
+  border:none;background:transparent;color:var(--accent-notebook);
+  font-size:13px;font-weight:600;padding:8px 4px;white-space:nowrap;
+}
+.picker-sound-btn:disabled{opacity:0.6;}
+.picker-text-btn{
+  border:none;background:transparent;color:var(--ink-soft);
+  font-size:15px;font-weight:600;padding:10px 12px;border-radius:12px;
+}
+.picker-text-btn.primary{color:var(--accent-notebook);}
+.picker-text-btn:active{background:rgba(255,255,255,0.08);}
 
 /* ---------- Toast notification ---------- */
 .toast{
