@@ -22,7 +22,6 @@
   const shoppingTextarea = el('shoppingTextarea');
 
   const undoSnackbar = el('undoSnackbar');
-  const undoLabel = el('undoLabel');
   const undoBtn = el('undoBtn');
   const undoRingProgress = el('undoRingProgress');
 
@@ -320,24 +319,41 @@
 	  }
 
   // ---------- Swipe-to-delete gesture ----------
-  // Started on .note-card-swipe (not on the drag handle — that one already
-  // stops propagation for its own pointerdown, see attachDrag). Direction
-  // (horizontal swipe vs vertical list/text scroll) is decided from the
-  // first few pixels of movement so it never fights the page's own
-  // vertical scrolling or the card-preview's own vertical text scroll.
+  // Started on .note-card-swipe (not on the drag handle -- that one already
+  // stops propagation for its own pointerdown, see attachDrag). CSS gives
+  // this element touch-action:none, so the browser never starts a native
+  // scroll of its own accord -- everything (horizontal reveal AND, when the
+  // gesture turns out vertical, the list/preview scroll) is driven here.
+  // That removes the previous race against Android WebView's compositor,
+  // which could start a native scroll before this handler's preventDefault()
+  // ran on a busy main thread, cancelling/reverting the horizontal swipe.
   function attachSwipe(card, swipe) {
+    const textEl = swipe.querySelector('.note-card-text');
     let tracking = false;
     let decided = null; // null | 'horizontal' | 'vertical'
     let startX = 0, startY = 0, baseX = 0, lastX = 0;
+    let startTarget = null;
+    let vTarget = null;   // element being manually scrolled this gesture
+    let vStartTop = 0;
+    let lastY = 0, lastT = 0, vVelocity = 0; // for a light momentum tail
 
     swipe.addEventListener('pointerdown', (e) => {
       tracking = true;
       decided = null;
       startX = e.clientX;
       startY = e.clientY;
+      lastY = e.clientY;
+      lastT = e.timeStamp;
+      vVelocity = 0;
+      startTarget = e.target;
       baseX = openSwipeCard === swipe ? -SWIPE_DELETE_WIDTH : 0;
       lastX = baseX;
       swipe.style.transition = 'none'; // instant tracking while the finger is down
+      // Captured immediately (not only once decided) since touch-action:none
+      // means nothing native will ever claim this gesture -- capturing early
+      // just guarantees we keep getting every move even if the finger
+      // strays outside the row bounds.
+      try { swipe.setPointerCapture(e.pointerId); } catch (err) {}
     });
 
     swipe.addEventListener('pointermove', (e) => {
@@ -345,32 +361,47 @@
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       if (!decided) {
-        // Small threshold so JS locks in the horizontal gesture (and calls
-        // setPointerCapture/preventDefault) before the browser's own
-        // touch-action:pan-y heuristic can claim the gesture as a vertical
-        // scroll — a larger threshold here loses that race more often.
-        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
         decided = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
         if (decided === 'horizontal') {
           if (openSwipeCard && openSwipeCard !== swipe) closeOpenSwipe();
-          try { swipe.setPointerCapture(e.pointerId); } catch (err) {}
+        } else {
+          // Scroll the inner text preview if the gesture started over it and
+          // it still has its own overflow to scroll; otherwise scroll the
+          // card list itself -- mirrors the nested-scroll resolution the
+          // browser used to do natively.
+          vTarget = (textEl && textEl.contains(startTarget) && textEl.scrollHeight > textEl.clientHeight)
+            ? textEl : listView;
+          vStartTop = vTarget.scrollTop;
         }
       }
-      if (decided !== 'horizontal') return;
       e.preventDefault();
-      lastX = Math.max(-SWIPE_DELETE_WIDTH, Math.min(0, baseX + dx));
-      swipe.style.transform = `translateX(${lastX}px)`;
+      if (decided === 'horizontal') {
+        lastX = Math.max(-SWIPE_DELETE_WIDTH, Math.min(0, baseX + dx));
+        swipe.style.transform = `translateX(${lastX}px)`;
+      } else if (vTarget) {
+        vTarget.scrollTop = vStartTop - dy;
+        const dt = e.timeStamp - lastT;
+        if (dt > 0) vVelocity = (e.clientY - lastY) / dt; // px per ms
+        lastY = e.clientY;
+        lastT = e.timeStamp;
+      }
     });
 
     function endDrag(e) {
       if (!tracking) return;
       tracking = false;
-      if (decided !== 'horizontal') { decided = null; return; }
       try { swipe.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (decided === 'vertical') {
+        flingScroll(vTarget, vVelocity);
+        vTarget = null;
+        decided = null;
+        return;
+      }
+      if (decided !== 'horizontal') { decided = null; return; }
       swipe.style.transition = 'transform .18s ease';
-      // Lower than a strict half-width: if the browser interrupted the
-      // gesture partway (see threshold comment above), a short-but-real
-      // horizontal drag should still commit to open instead of snapping shut.
+      // Lower than a strict half-width so a short-but-clearly-horizontal
+      // drag still commits to open rather than snapping shut.
       if (lastX < -SWIPE_DELETE_WIDTH * 0.35) {
         swipe.style.transform = `translateX(${-SWIPE_DELETE_WIDTH}px)`;
         openSwipeCard = swipe;
@@ -384,6 +415,21 @@
     }
     swipe.addEventListener('pointerup', endDrag);
     swipe.addEventListener('pointercancel', endDrag);
+  }
+
+  // Small inertia tail for the manually-driven vertical scroll above (native
+  // fling no longer applies once touch-action is 'none') -- decelerates a
+  // scrollTop-based scroll using the release velocity (px/ms). scrollTop
+  // assignment is auto-clamped by the browser, so no manual bounds needed.
+  function flingScroll(el, velocity) {
+    if (!el || Math.abs(velocity) < 0.02) return;
+    let v = velocity * 16; // px per ~frame
+    function step() {
+      v *= 0.94;
+      el.scrollTop -= v;
+      if (Math.abs(v) > 0.5) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
   }
 
   // ---------- Delete with undo ----------
@@ -415,7 +461,6 @@
   function showUndoSnackbar(note, tab) {
     if (undoState) clearTimeout(undoState.timer);
     undoState = { note, tab, timer: null };
-    undoLabel.textContent = 'Заметка удалена';
     undoSnackbar.classList.remove('hidden');
 
     // CSS keyframe animation (not a JS-driven transition) so it isn't at the

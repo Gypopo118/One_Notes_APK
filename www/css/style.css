@@ -183,7 +183,16 @@ button{font-family:inherit;}
   padding:12px 46px 10px 20px;
   min-height:88px;
   cursor:pointer;
-  touch-action:pan-y; /* vertical list/text scroll stays native; horizontal is ours (JS) */
+  /* touch-action:none (not pan-y): with pan-y, Android WebView can
+     optimistically start a native vertical scroll on the compositor thread
+     the instant it sees any vertical movement, WITHOUT waiting for this
+     row's pointermove handler to run on the main thread — a race the JS
+     side loses more often the busier the main thread gets, which is why
+     the horizontal swipe used to intermittently get cancelled/reverted.
+     With touch-action:none the browser never starts anything on its own;
+     app.js drives both the horizontal reveal AND (when the gesture turns
+     out vertical) the list/preview scrolling manually — see attachSwipe(). */
+  touch-action:none;
 }
 
 /* Revealed by swiping .note-card-swipe left; width must match
