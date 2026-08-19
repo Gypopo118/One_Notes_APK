@@ -162,10 +162,19 @@ button{font-family:inherit;}
   max-height:500px;
   transition:transform .12s ease, box-shadow .12s ease, opacity .18s ease, max-height .18s ease;
 }
+/* Перетаскиваемая плашка. НЕ ставить сюда pointer-events:none — именно из-за
+   него (в паре с переносом узла в document.body, который снимал pointer
+   capture) плашка переставала получать pointermove/pointerup и намертво
+   зависала поверх списка. Позиционирование при перетаскивании задаёт JS
+   (position:fixed + top/left/width), родитель при этом не меняется —
+   см. startReorder() в app.js. */
 .note-card.dragging{
   box-shadow:0 10px 24px rgba(0,0,0,0.4);
   transform:scale(1.02);
-  pointer-events:none;
+  /* мгновенная реакция на палец: transition от .note-card тут только мешает */
+  transition:box-shadow .12s ease;
+  /* курсор/выделение не должны мигать, пока плашка едет за пальцем */
+  cursor:grabbing;
 }
 .note-card-exit{
   opacity:0;

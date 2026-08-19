@@ -164,8 +164,10 @@
     notes.forEach((note) => cardsContainer.appendChild(buildCard(note)));
   }
 
-  // Свайп влево на плашке (не свайп на самой ручке-хендле — та занята
-  // drag-to-reorder) открывает корзину, спрятанную за правым краем.
+  // Свайп влево на плашке открывает корзину, спрятанную за правым краем.
+  // Ручка-хендл (6 пар точек справа) по умолчанию занята перетаскиванием
+  // вверх-вниз, но явно горизонтальный жест, начатый на ней, всё равно
+  // считается свайпом — см. attachCardGesture().
   // Одновременно открыта только одна плашка — открытие новой закрывает
   // предыдущую. Ширина зоны корзины должна совпадать с CSS
   // (.note-card-delete-reveal width).
@@ -179,9 +181,46 @@
     }
   }
 
+  // Клик мимо открытой плашки закрывает её. Проверяется ВНЕШНИЙ .note-card,
+  // а не сам .note-card-swipe: синтетический click, который Chrome шлёт
+  // после тач-жеста, адресуется общему предку точек down/up, и им нередко
+  // оказывается именно .note-card — тогда contains() на swipe давал false
+  // и только что открытая корзина немедленно закрывалась.
   document.addEventListener('click', (e) => {
-    if (openSwipeCard && !openSwipeCard.contains(e.target)) closeOpenSwipe();
+    if (!openSwipeCard) return;
+    const host = openSwipeCard.closest('.note-card');
+    if (host && host.contains(e.target)) return;
+    closeOpenSwipe();
   });
+
+  // Chrome генерирует click после ЛЮБОГО тач-жеста, который не привёл к
+  // нативному скроллу — в том числе после свайпа на все 76 px. Раньше этот
+  // click гасился флагами card.dataset.wasSwipe/wasDrag со сбросом через
+  // setTimeout(..., 50): если WebView присылал click позже 50 мс (а на
+  // многострочных плашках, где кадр тяжелее, именно так и происходило),
+  // флаг успевал сброситься, обработчик click трактовал жест как «тап по
+  // открытой плашке» и тут же её закрывал — та самая «приоткрылась и
+  // схлопнулась назад». Теперь click после жеста глотается на фазе
+  // capture, а флаг живёт до следующего pointerdown — гонки с таймером
+  // больше нет.
+  let swallowNextClick = false;
+  document.addEventListener('pointerdown', () => { swallowNextClick = false; }, true);
+  document.addEventListener('click', (e) => {
+    if (!swallowNextClick) return;
+    swallowNextClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+
+  // Единственная активная жестовая сессия на весь список. Глобальные
+  // страховочные слушатели ниже доводят её до конца даже если pointerup
+  // ушёл мимо .note-card-swipe (потерян pointer capture, палец оторвался
+  // за пределами карточки, приложение ушло в фон) — раньше в таком случае
+  // карточка навсегда оставалась в состоянии dragging поверх списка.
+  let activeGesture = null;
+  window.addEventListener('pointerup', (e) => { if (activeGesture) activeGesture(e, false); });
+  window.addEventListener('pointercancel', (e) => { if (activeGesture) activeGesture(e, true); });
+  window.addEventListener('blur', () => { if (activeGesture) activeGesture(null, true); });
 
   function buildCard(note) {
     const card = document.createElement('div');
@@ -248,13 +287,11 @@
 
     card.appendChild(swipe);
 
-    swipe.addEventListener('click', () => {
-      if (card.dataset.wasDrag === '1' || card.dataset.wasSwipe === '1') return;
-      if (openSwipeCard === swipe) { closeOpenSwipe(); return; }
-      openEditor(note);
-    });
-
-    attachCardGesture(card, swipe, handle);
+    // Открытие заметки по тапу живёт теперь внутри attachCardGesture
+    // (ветка «порог так и не пересекли» в pointerup), а не в отдельном
+    // обработчике click: click после тач-жеста приходит с непредсказуемой
+    // задержкой и именно он ломал свайп — см. swallowNextClick выше.
+    attachCardGesture(card, swipe, handle, note);
     return card;
   }
 
@@ -316,43 +353,53 @@
 	    return update;
 	  }
 
-  // ---------- Unified card gesture: swipe-to-delete / drag-to-reorder / scroll ----------
-  // Used to be two separate listeners: one on the handle (stopPropagation,
-  // committed to "drag" the instant pointerdown fired, no direction check
-  // at all) and one on the row (attachSwipe, direction-aware). That meant a
-  // swipe that happened to START over the handle's hit area -- the
-  // right-hand ~40px of the card, right where a natural swipe starting from
-  // the right edge lands -- never reached the swipe logic: the handle
-  // grabbed it unconditionally and the row below never even saw a
-  // pointerdown. One listener here decides direction first (same
-  // dx-vs-dy check as before) and only THEN commits to reorder (dy-dominant
-  // AND started on the handle), horizontal swipe (dx-dominant, from
-  // anywhere including the handle), or vertical list/preview scroll
-  // (dy-dominant, elsewhere). touch-action:none on both .note-card-swipe
-  // and .note-card-handle means the browser never starts anything natively
-  // on its own, so none of this races the compositor.
-  function attachCardGesture(card, swipe, handle) {
+  // ---------- Единый жест на плашке: свайп-удаление / перетаскивание / скролл ----------
+  // Один слушатель на .note-card-swipe решает, чем оказался жест:
+  //   * 'reorder'    — старт на ручке (6 пар точек справа); перетаскивание
+  //                    плашки вверх-вниз между соседями;
+  //   * 'horizontal' — свайп влево, открывающий корзину;
+  //   * 'vertical'   — скролл превью текста или всего списка (браузер сам
+  //                    этого не делает: на .note-card-swipe touch-action:none);
+  //   * тап          — открыть заметку либо закрыть открытую корзину.
+  // Направление определяется один раз, когда палец прошёл DIR_THRESHOLD по
+  // доминирующей оси, и дальше жест уже не переобувается.
+  function attachCardGesture(card, swipe, handle, note) {
     const textEl = swipe.querySelector('.note-card-text');
+    const DIR_THRESHOLD = 10; // px по доминирующей оси до принятия решения
+
     let tracking = false;
+    let pointerId = null;
     let decided = null; // null | 'horizontal' | 'vertical' | 'reorder'
     let onHandle = false;
     let startX = 0, startY = 0, baseX = 0, lastX = 0;
     let startTarget = null;
-    let vTarget = null;   // element being manually scrolled this gesture
+    let vTarget = null;   // элемент, который скроллим руками в этом жесте
     let vStartTop = 0;
-    let lastY = 0, lastT = 0, vVelocity = 0; // for a light momentum tail
+    let lastY = 0, lastT = 0, vVelocity = 0; // для лёгкой инерции
 
-    // ---- drag-to-reorder state (only used once decided === 'reorder') ----
+    // ---- состояние перетаскивания (используется только при decided === 'reorder') ----
     let initialTop = 0, cardHeight = 0, placeholder = null;
 
     function otherCards() {
       return Array.from(cardsContainer.children).filter((c) => c !== card && c !== placeholder);
     }
 
-    function startReorder() {
+    // ВАЖНО: карточка НЕ переезжает в document.body.
+    // Прежняя версия делала здесь document.body.appendChild(card) — при
+    // смене родителя узел на мгновение покидает документ, Chrome снимает с
+    // него pointer capture, а .note-card.dragging{pointer-events:none}
+    // довершал дело: ни pointermove, ни pointerup до обработчиков больше не
+    // доходили. Плашка так и оставалась position:fixed поверх списка и
+    // переставала двигаться — ровно тот баг «зависает, помогает только
+    // перезагрузка». position:fixed отлично работает и без смены родителя:
+    // fixed-элемент выпадает из потока flex-контейнера, а его место в
+    // списке держит placeholder.
+    function startReorder(e) {
       const rect = card.getBoundingClientRect();
-      initialTop = rect.top;
       cardHeight = rect.height;
+      // Компенсируем те ~10 px, что палец прошёл до принятия решения,
+      // иначе плашка прыгает под пальцем в момент захвата.
+      initialTop = rect.top - (e.clientY - startY);
 
       placeholder = document.createElement('div');
       placeholder.className = 'note-card-placeholder';
@@ -360,17 +407,15 @@
 
       card.classList.add('dragging');
       card.style.position = 'fixed';
-      card.style.top = initialTop + 'px';
+      card.style.top = rect.top + 'px';
       card.style.left = rect.left + 'px';
       card.style.width = rect.width + 'px';
       card.style.margin = '0';
       card.style.zIndex = '50';
-      document.body.appendChild(card);
     }
 
     function updateReorder(e) {
-      const dy = e.clientY - startY;
-      const newTop = initialTop + dy;
+      const newTop = initialTop + (e.clientY - startY);
       card.style.top = newTop + 'px';
 
       const cardMidY = newTop + cardHeight / 2;
@@ -386,7 +431,7 @@
         cardsContainer.appendChild(placeholder);
       }
 
-      // Auto-scroll the list when dragging near its top/bottom edge.
+      // Автопрокрутка списка, когда тянем к его верхнему/нижнему краю.
       const svRect = listView.getBoundingClientRect();
       const edge = 48;
       if (e.clientY < svRect.top + edge) listView.scrollTop -= 12;
@@ -405,8 +450,6 @@
       if (placeholder && placeholder.parentNode) {
         cardsContainer.insertBefore(card, placeholder);
         placeholder.remove();
-      } else {
-        cardsContainer.appendChild(card);
       }
       placeholder = null;
 
@@ -420,7 +463,10 @@
     }
 
     swipe.addEventListener('pointerdown', (e) => {
+      if (tracking) return;                       // второй палец не перехватывает жест
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       tracking = true;
+      pointerId = e.pointerId;
       decided = null;
       onHandle = handle.contains(e.target);
       startX = e.clientX;
@@ -431,46 +477,54 @@
       startTarget = e.target;
       baseX = openSwipeCard === swipe ? -SWIPE_DELETE_WIDTH : 0;
       lastX = baseX;
-      swipe.style.transition = 'none'; // instant tracking while the finger is down
-      // A bare tap on the handle (no real movement) shouldn't open the
-      // editor -- mirrors the old handle-only behaviour; cleared again
-      // below once we know whether this turned into an actual gesture.
-      if (onHandle) card.dataset.wasDrag = '1';
+      swipe.style.transition = 'none';            // мгновенное слежение за пальцем
+      activeGesture = endGesture;                 // страховка на window, см. выше
       try { swipe.setPointerCapture(e.pointerId); } catch (err) {}
     });
 
     swipe.addEventListener('pointermove', (e) => {
-      if (!tracking) return;
+      if (!tracking || e.pointerId !== pointerId) return;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
+
       if (!decided) {
-        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-        if (Math.abs(dx) > Math.abs(dy)) {
-          decided = 'horizontal';
-          if (onHandle) card.dataset.wasDrag = '0'; // turned out to be a swipe, not a drag
-          if (openSwipeCard && openSwipeCard !== swipe) closeOpenSwipe();
-        } else if (onHandle) {
-          decided = 'reorder';
-          startReorder();
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < DIR_THRESHOLD) return;
+        if (onHandle) {
+          // Ручка — выделенная зона перетаскивания, поэтому по умолчанию
+          // даёт reorder при любом движении. Исключение — явно
+          // горизонтальный жест (вдвое длиннее по X, чем по Y): свайп,
+          // начатый у правого края, всё равно откроет корзину.
+          decided = Math.abs(dx) > Math.abs(dy) * 2 ? 'horizontal' : 'reorder';
         } else {
-          decided = 'vertical';
-          // Scroll the inner text preview if the gesture started over it and
-          // it still has its own overflow to scroll; otherwise scroll the
-          // card list itself -- mirrors the nested-scroll resolution the
-          // browser used to do natively.
+          decided = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
+        }
+
+        if (decided === 'horizontal') {
+          if (openSwipeCard && openSwipeCard !== swipe) closeOpenSwipe();
+        } else if (decided === 'reorder') {
+          closeOpenSwipe();   // тащить приоткрытую плашку нельзя — сначала закрываем
+          baseX = 0;
+          startReorder(e);
+        } else {
+          // Скроллим превью текста, если жест начался над ним и ему есть
+          // что скроллить; иначе — сам список карточек. Это ручная замена
+          // вложенного скролла, который браузер больше не делает сам
+          // (touch-action:none).
           vTarget = (textEl && textEl.contains(startTarget) && textEl.scrollHeight > textEl.clientHeight)
             ? textEl : listView;
           vStartTop = vTarget.scrollTop;
         }
       }
-      e.preventDefault();
+
+      if (e.cancelable) e.preventDefault();
+
       if (decided === 'horizontal') {
         lastX = Math.max(-SWIPE_DELETE_WIDTH, Math.min(0, baseX + dx));
-        swipe.style.transform = `translateX(${lastX}px)`;
+        swipe.style.transform = 'translateX(' + lastX + 'px)';
       } else if (decided === 'vertical' && vTarget) {
         vTarget.scrollTop = vStartTop - dy;
         const dt = e.timeStamp - lastT;
-        if (dt > 0) vVelocity = (e.clientY - lastY) / dt; // px per ms
+        if (dt > 0) vVelocity = (e.clientY - lastY) / dt; // px/мс
         lastY = e.clientY;
         lastT = e.timeStamp;
       } else if (decided === 'reorder') {
@@ -478,47 +532,62 @@
       }
     });
 
-    function endDrag(e) {
+    // Единая точка завершения жеста: вызывается и из pointerup/pointercancel
+    // на самой плашке, и из глобальных страховочных слушателей на window
+    // (через activeGesture). Идемпотентна — первый же вызов снимает tracking.
+    function endGesture(e, cancelled) {
       if (!tracking) return;
+      if (e && e.pointerId !== undefined && e.pointerId !== pointerId) return;
       tracking = false;
-      try { swipe.releasePointerCapture(e.pointerId); } catch (err) {}
+      activeGesture = null;
+      if (e) { try { swipe.releasePointerCapture(e.pointerId); } catch (err) {} }
 
-      if (decided === 'reorder') {
+      const kind = decided;
+      decided = null;
+
+      // Возвращаем анимацию, снятую в pointerdown ради мгновенного слежения
+      // за пальцем. Делается для ЛЮБОГО исхода жеста, иначе плашка,
+      // побывавшая под пальцем, потом закрывалась бы рывком (closeOpenSwipe
+      // из тапа мимо, из удаления, из свайпа по соседней плашке).
+      swipe.style.transition = 'transform .18s ease';
+
+      if (kind === 'reorder') {
         finishReorder();
-        decided = null;
-        setTimeout(() => { card.dataset.wasDrag = '0'; }, 50);
+        swallowNextClick = true;
         return;
       }
-      if (decided === 'vertical') {
+      if (kind === 'vertical') {
         flingScroll(vTarget, vVelocity);
         vTarget = null;
-        decided = null;
+        swallowNextClick = true;
         return;
       }
-      if (decided !== 'horizontal') {
-        // Plain tap (never crossed the direction threshold). If it started
-        // on the handle, clear the drag guard so it doesn't also swallow
-        // the click; otherwise nothing to undo.
-        if (onHandle) setTimeout(() => { card.dataset.wasDrag = '0'; }, 50);
-        decided = null;
+      if (kind === 'horizontal') {
+        // Порог ниже строгой половины: короткий, но однозначно
+        // горизонтальный жест должен доводить корзину до открытия,
+        // а не схлопывать её обратно.
+        if (lastX < -SWIPE_DELETE_WIDTH * 0.35) {
+          swipe.style.transform = 'translateX(' + (-SWIPE_DELETE_WIDTH) + 'px)';
+          openSwipeCard = swipe;
+        } else {
+          swipe.style.transform = '';
+          if (openSwipeCard === swipe) openSwipeCard = null;
+        }
+        swallowNextClick = true;
         return;
       }
-      swipe.style.transition = 'transform .18s ease';
-      // Lower than a strict half-width so a short-but-clearly-horizontal
-      // drag still commits to open rather than snapping shut.
-      if (lastX < -SWIPE_DELETE_WIDTH * 0.35) {
-        swipe.style.transform = `translateX(${-SWIPE_DELETE_WIDTH}px)`;
-        openSwipeCard = swipe;
-      } else {
-        swipe.style.transform = '';
-        if (openSwipeCard === swipe) openSwipeCard = null;
-      }
-      card.dataset.wasSwipe = '1';
-      decided = null;
-      setTimeout(() => { card.dataset.wasSwipe = '0'; }, 50);
+
+      // Порог так и не пересекли — это тап. Обрабатываем прямо здесь;
+      // синтетический click глотаем в любом случае.
+      swallowNextClick = true;
+      if (cancelled) return;
+      if (openSwipeCard) { closeOpenSwipe(); return; } // первый тап просто закрывает корзину
+      if (onHandle) return;                            // тап по ручке ничего не открывает
+      openEditor(note);
     }
-    swipe.addEventListener('pointerup', endDrag);
-    swipe.addEventListener('pointercancel', endDrag);
+
+    swipe.addEventListener('pointerup', (e) => endGesture(e, false));
+    swipe.addEventListener('pointercancel', (e) => endGesture(e, true));
   }
 
   // Small inertia tail for the manually-driven vertical scroll above (native
