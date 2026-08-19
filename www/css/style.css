@@ -5,6 +5,7 @@
   --card: #241a35;
   --card-border: #3a2a55;
   --ink: #F8F5EF;
+  --ink-bright: #FFFFFF; /* purer white, reserved for user-entered note text */
   --ink-soft: #F3ECD9;
   --ink-dim: #9384b0; /* muted purple-gray for secondary/low-priority text, e.g. card dates */
   --control-bg: #382a4d;
@@ -17,6 +18,9 @@
   --glass-border: rgba(255,255,255,0.13);
   --glass-highlight: rgba(255,255,255,0.30);
   --glass-blur: 20px;
+  /* Shared gradient fill for the small "glass button" style (clear/reminder/
+     send/fab) — a light-catching diagonal sheen on top of a translucent base. */
+  --glass-btn-grad: linear-gradient(155deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.07) 45%, rgba(255,255,255,0.03) 100%);
 
   --accent-urgent: #FF7A6E;
   --accent-urgent-bg: rgba(255,122,110,0.16);
@@ -90,11 +94,6 @@ button{font-family:inherit;}
   min-height:var(--topbar-height);
   display:flex;align-items:center;justify-content:space-between;
   padding:0 12px;
-  background:var(--glass-bg);
-  backdrop-filter:blur(var(--glass-blur));
-  -webkit-backdrop-filter:blur(var(--glass-blur));
-  border-bottom:1px solid var(--glass-border);
-  box-shadow:inset 0 1px 0 var(--glass-highlight);
   z-index:20;
 }
 .topbar.hidden{display:none;}
@@ -108,12 +107,17 @@ button{font-family:inherit;}
 
 .clear-btn{
   display:flex;align-items:center;gap:6px;
-  border:1px solid var(--control-border);
-  background:var(--control-bg);
+  border:1px solid var(--glass-border);
+  background:var(--glass-btn-grad);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  box-shadow:inset 0 1px 0 var(--glass-highlight);
   color:var(--ink);
   border-radius:14px;
   padding:8px 14px;
+  min-height:38px;
   font-size:13px;font-weight:600;
+  touch-action:manipulation;
 }
 .clear-btn:active{opacity:0.8;}
 .clear-btn.confirming{
@@ -221,10 +225,7 @@ button{font-family:inherit;}
 .note-card-text-inner{
   white-space:pre-wrap;
   word-break:break-word;
-}
-.note-card-text-inner{
-  white-space:pre-wrap;
-  word-break:break-word;
+  color:var(--ink-bright);
 }
 .note-scroll-track{
   position:absolute;
@@ -239,7 +240,7 @@ button{font-family:inherit;}
   left:1px;width:3px;
   min-height:6px;
   border-radius:2px;
-  background:var(--ink-soft);
+  background:var(--ink-dim);
   opacity:0.65;
 }
 .note-card-meta{
@@ -267,7 +268,7 @@ button{font-family:inherit;}
   position:absolute;top:50%;right:10px;
   transform:translateY(-50%);
   width:30px;height:56px;border-radius:15px;
-  border:none;background:transparent;color:var(--ink-soft);
+  border:none;background:transparent;color:var(--ink-dim);
   display:flex;align-items:center;justify-content:center;
   touch-action:none; /* the drag-to-reorder gesture starts here, never as page scroll */
   cursor:grab;
@@ -279,12 +280,15 @@ button{font-family:inherit;}
   right:16px;
   bottom:calc(var(--nav-height) + 14px);
   width:56px;height:56px;
-  border:none;
+  border:1px solid rgba(192,138,62,0.5);
   border-radius:50%;
-  background:var(--accent-fab);
-  color:var(--accent-fab-ink);
+  background:linear-gradient(155deg, rgba(192,138,62,0.55) 0%, rgba(192,138,62,0.32) 45%, rgba(192,138,62,0.20) 100%);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  color:var(--accent-fab);
   display:flex;align-items:center;justify-content:center;
-  box-shadow:0 6px 18px rgba(0,0,0,0.35);
+  box-shadow:inset 0 1px 0 var(--glass-highlight), 0 6px 18px rgba(0,0,0,0.35);
+  touch-action:manipulation;
   z-index:15;
 }
 .new-note-fab:active{transform:scale(0.94);}
@@ -309,12 +313,12 @@ button{font-family:inherit;}
 .editor-card{
   flex:1;min-height:0;
   display:flex;flex-direction:column;
-  background:var(--glass-bg);
-  backdrop-filter:blur(var(--glass-blur));
-  -webkit-backdrop-filter:blur(var(--glass-blur));
+  background:linear-gradient(160deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.05) 40%, rgba(255,255,255,0.025) 100%);
+  backdrop-filter:blur(calc(var(--glass-blur) + 8px));
+  -webkit-backdrop-filter:blur(calc(var(--glass-blur) + 8px));
   border:1px solid var(--glass-border);
   border-radius:var(--radius-lg);
-  box-shadow:inset 0 1px 0 var(--glass-highlight), 0 8px 24px rgba(0,0,0,0.35);
+  box-shadow:inset 0 1px 0 var(--glass-highlight), inset 0 0 40px rgba(255,255,255,0.025), 0 8px 24px rgba(0,0,0,0.35);
   overflow:hidden;
   transform-origin:top left;
 }
@@ -326,7 +330,7 @@ button{font-family:inherit;}
   border:none;outline:none;resize:none;
   background:transparent;
   font-size:18px;line-height:1.5;
-  color:var(--ink);
+  color:var(--ink-bright);
   font-family:inherit;
   padding:18px 18px 8px 18px;
 }
@@ -336,13 +340,17 @@ button{font-family:inherit;}
 }
 .reminder-btn{
   flex:2;
-  border:1px solid var(--control-border);
-  background:var(--control-bg);
+  border:1px solid var(--glass-border);
+  background:var(--glass-btn-grad);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  box-shadow:inset 0 1px 0 var(--glass-highlight);
   border-radius:var(--radius-md);
   padding:14px 10px;
   font-size:14px;color:var(--ink);
   display:flex;align-items:center;justify-content:center;gap:8px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  touch-action:manipulation;
 }
 .reminder-btn.set{
   color:var(--accent-urgent);
@@ -352,11 +360,15 @@ button{font-family:inherit;}
 }
 .send-btn{
   flex:1;
-  border:1px solid var(--control-border);
-  background:var(--control-bg);
+  border:1px solid var(--glass-border);
+  background:var(--glass-btn-grad);
+  backdrop-filter:blur(var(--glass-blur));
+  -webkit-backdrop-filter:blur(var(--glass-blur));
+  box-shadow:inset 0 1px 0 var(--glass-highlight);
   color:var(--ink);
   border-radius:var(--radius-md);
   display:flex;align-items:center;justify-content:center;
+  touch-action:manipulation;
 }
 .send-btn:active{opacity:0.8;}
 .shopping-view .editor-card .editor-textarea{
@@ -403,15 +415,7 @@ button{font-family:inherit;}
   height:var(--nav-height);
   display:flex;gap:8px;
   padding:8px 10px calc(10px + env(safe-area-inset-bottom)) 10px;
-  background:var(--glass-bg);
-  backdrop-filter:blur(var(--glass-blur));
-  -webkit-backdrop-filter:blur(var(--glass-blur));
-  border-top:1px solid var(--glass-border);
-  box-shadow:inset 0 1px 0 var(--glass-highlight);
   z-index:25;
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))){
-  .bottom-nav{background:var(--bg);}
 }
 /* Glass pill per tab. Inactive tabs keep a dark, neutral (non-accent-colored)
    border/glow — only the icon/text stay tinted in the tab's own accent hue
@@ -428,6 +432,7 @@ button{font-family:inherit;}
   font-size:12px;font-weight:600;line-height:1.15;
   background:var(--glass-bg);
   transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;
+  touch-action:manipulation;
 }
 .nav-badge{
   position:absolute;top:4px;left:8px;

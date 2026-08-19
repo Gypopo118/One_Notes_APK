@@ -337,6 +337,7 @@
       startY = e.clientY;
       baseX = openSwipeCard === swipe ? -SWIPE_DELETE_WIDTH : 0;
       lastX = baseX;
+      swipe.style.transition = 'none'; // instant tracking while the finger is down
     });
 
     swipe.addEventListener('pointermove', (e) => {
@@ -344,7 +345,11 @@
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       if (!decided) {
-        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        // Small threshold so JS locks in the horizontal gesture (and calls
+        // setPointerCapture/preventDefault) before the browser's own
+        // touch-action:pan-y heuristic can claim the gesture as a vertical
+        // scroll — a larger threshold here loses that race more often.
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
         decided = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
         if (decided === 'horizontal') {
           if (openSwipeCard && openSwipeCard !== swipe) closeOpenSwipe();
@@ -362,7 +367,11 @@
       tracking = false;
       if (decided !== 'horizontal') { decided = null; return; }
       try { swipe.releasePointerCapture(e.pointerId); } catch (err) {}
-      if (lastX < -SWIPE_DELETE_WIDTH / 2) {
+      swipe.style.transition = 'transform .18s ease';
+      // Lower than a strict half-width: if the browser interrupted the
+      // gesture partway (see threshold comment above), a short-but-real
+      // horizontal drag should still commit to open instead of snapping shut.
+      if (lastX < -SWIPE_DELETE_WIDTH * 0.35) {
         swipe.style.transform = `translateX(${-SWIPE_DELETE_WIDTH}px)`;
         openSwipeCard = swipe;
       } else {
